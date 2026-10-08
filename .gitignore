@@ -1,0 +1,37 @@
+# Rust build output
+/target/
+
+# Local editor and assistant settings
+/.vscode/
+/.idea/
+/.codex/
+/.agents/
+
+# Environment variables and private local configuration
+.env
+.env.*
+!.env.example
+!.env.sample
+*.local
+*.local.*
+/config.local/
+/settings.local/
+/.cargo/config
+/.cargo/config.toml
+/.cargo/credentials
+/.cargo/credentials.toml
+
+# Credentials and private keys
+/secrets/
+/credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# macOS and editor temporary files
+.DS_Store
+._*
+*.swp
+*.swo
+*~
