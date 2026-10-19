@@ -1,3 +1,11 @@
 pub mod cli;
+pub mod clipboard;
+pub mod config;
+pub mod data;
+pub mod display;
 pub mod fa_reader;
 pub mod format;
+pub mod headers;
+pub mod source;
+pub mod ui;
+pub mod worker;

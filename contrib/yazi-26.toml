@@ -1,0 +1,11 @@
+# Yazi 26.9 and later.
+[opener]
+sq = [
+  { run = 'sq -- %s', block = true, desc = "Sequence browser", for = "unix" },
+]
+
+[open]
+prepend_rules = [
+  { url = "*.{fa,fasta,fna,fas,fsa,faa,pep,fq,fastq,sam,bam}", use = "sq" },
+  { url = "*.{fa,fasta,fna,fas,fsa,faa,pep,fq,fastq,sam}.{gz,bgz,bgzf}", use = "sq" },
+]

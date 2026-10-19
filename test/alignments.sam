@@ -1,0 +1,15 @@
+@HD	VN:1.6	SO:unsorted
+@SQ	SN:chr1	LN:1000000
+@SQ	SN:chr:two	LN:1000000
+@RG	ID:group1	SM:sample1
+duplicate	99	chr1	101	60	2S4M1I3M1D2M	=	151	62	ACGTRYSWKMBD	!+5?IS]gq{~~	NM:i:2	RG:Z:group1	XA:A:Q	XB:B:c,-128,0,127	XC:B:C,0,255	XD:B:s,-32768,32767	XE:B:S,0,65535	XF:B:i,-2147483648,2147483647	XG:B:I,0,4294967295	XH:H:0A7F	XI:f:1.5	XJ:B:f,-0.25,3.5
+duplicate	147	chr1	151	30	12M	=	101	-62	AACCGGTTNNNN	IIIIIIIIIIII
+duplicate	355	chr:two	50	0	12M	chr1	151	0	ACGTRYSWKMBD	*	AS:i:-10
+duplicate	2147	chr:two	201	20	6H6M	chr1	151	0	SWKMBD	555555	SA:Z:chr1,101,+,12M,60,2;
+no-sequence	260	*	0	0	*	*	0	0	*	*
+no-quality	0	chr1	401	255	5M	*	0	0	GCGNN	*
+unmapped	4	*	0	0	*	*	0	0	NACGT	!5I~?
+all-codes	0	chr1	501	42	16M	*	0	0	=ACMGRSVTWYHKDBN	!"#$%&'()*+,-./0
+operators	16	chr:two	75	17	1H1S2=1X1I2M1D3N1P2M1S1H	*	0	0	ACGTNACGTA	??????????
+mapped-no-seq	0	chr1	701	60	10M	*	0	0	*	*
+*	4	*	0	0	*	*	0	0	GCN	!.?

@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 #[test]
-fn prints_first_header_for_each_input_file() {
+fn prints_all_records_for_each_input_file() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/test.fa");
     let output = Command::new(env!("CARGO_BIN_EXE_sq"))
         .arg(&fixture)
@@ -13,11 +13,8 @@ fn prints_first_header_for_each_input_file() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert_eq!(stdout.matches("FastaReader {").count(), 2);
-    assert!(stdout.contains("name: \"seq1\""));
-    assert!(stdout.contains("description: \"example description\""));
-    assert!(stdout.contains("}\nFastaReader {"));
-    assert!(!stdout.contains("seq2"));
+    let expected = ">seq1 example description\nACGTTGCA\n>seq2\nAAA\n";
+    assert_eq!(stdout, expected.repeat(2));
 }
 
 #[test]
