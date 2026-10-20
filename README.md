@@ -1,224 +1,122 @@
 # seqviz-rs
 
-**Browse biological sequences without leaving your terminal.**
+**在终端里看清序列和测序质量。**
 
-`seqviz-rs` ships the `sq` command for browsing nucleotide and protein FASTA, FASTQ, SAM, and BAM files. Open one file or several files in mixed formats, move between records, inspect sequence and quality data, and copy what you need — the source files are never modified.
-
-This branch contains the first browser implementation. The interface is in English and targets macOS and Linux, including SSH sessions. Run it straight from the command line or through a blocking Yazi opener.
-
-For module responsibilities and data flow, see the [architecture guide](docs/architecture.md).
-
-## Quick start
-
-Run the bundled FASTA example from this checkout:
-
-```sh
-cargo run --release --locked -- test/test.fa
-```
-
-Open FASTA and BAM in separate tabs:
-
-```sh
-cargo run --release --locked -- test/test.fa test/alignments.bam
-```
-
-Press `Tab` to switch files, `?` for help, and `q` to quit.
-
-To install the command from this checkout:
-
-```sh
-cargo install --path . --locked
-sq --version
-```
-
-Building needs Rust and Cargo, plus a C compiler for the native dependencies: SQLite is bundled through `rusqlite`, and gzip decoding uses zlib through `libz-sys`. The repository checks use the stable Rust toolchain.
-
-Once installed:
+`sq` 是一个生物序列浏览器。给它一个文件路径，就能在左右双栏中查看记录和序列；多个文件会打开成标签页。支持核酸与蛋白质 FASTA、FASTQ，以及 SAM/BAM，在 macOS 和 Linux 上使用，界面为英文。
 
 ```sh
 sq genome.fa
 sq reads.fastq.gz
 sq proteins.faa alignments.bam
+```
+
+在 yazi 中也可以按 Enter 打开，浏览完按 `q` 回到文件列表。
+
+![FASTQ 浏览界面：记录列表、质量着色和文件标签](docs/assets/fastq-browser.png)
+
+## 能看到什么
+
+| 文件 | 显示内容 |
+| --- | --- |
+| 核酸 FASTA | 碱基着色，完整 header、长度和 GC |
+| 蛋白质 FASTA | 氨基酸分组着色，完整 header 和序列长度 |
+| FASTQ | 按质量着色的碱基，逐字符质量副行、质量概览条和 Q30 等属性 |
+| SAM / BAM | 每条比对记录的序列与质量，以及参考序列、位置、FLAG、MAPQ、CIGAR 和附加字段 |
+
+支持 gzip 和 BGZF 压缩输入。FASTQ 接受跨行序列与质量，使用 Phred+33，并解析 Illumina、Nanopore、PacBio 和 SRA 的 header；原始 header 始终保留。
+
+序列随窗口宽度自动换行，位置从 1 开始。切换标签时，各文件保留自己的当前记录和滚动位置。FASTA/FASTQ 可以用鼠标跨行选择序列，拖到边缘继续滚动；缩放窗口后选区仍对应原来的序列区间。
+
+## 安装与试用
+
+需要 Rust、Cargo 和 C 编译器。在源码目录安装 `sq`。
+
+```sh
+git clone https://github.com/Georicl/seqviz-rs.git
+cd seqviz-rs
+cargo install --path . --locked
+sq --version
+sq test/test.fa
+```
+
+也可以先运行仓库里的示例，不安装命令。
+
+```sh
+cargo run --release --locked -- test/test.fa test/alignments.bam
+```
+
+传入多个路径，就能在同一个浏览器中切换文件。文件名以 `-` 开头时，在路径前加 `--`。
+
+```sh
+sq assembly.fa reads.fastq.gz proteins.faa
 sq -- "-sample.fa"
 ```
 
-The browser opens when both stdin and stdout are terminals. Redirected output prints FASTA, including gzip/BGZF inputs, through the same reader and validation rules as the browser. Other formats require an interactive terminal; SAM/BAM cannot be printed or copied.
+## 常用操作
 
-## Supported files
-
-| Format | Browsing features |
+| 操作 | 按键或鼠标 |
 | --- | --- |
-| Nucleotide FASTA | Full header, sequence, length, GC and nucleotide colours |
-| Protein FASTA | Full header, sequence, length in amino acids and residue-category colours |
-| FASTQ | Wrapped sequence and quality fields, quality-coloured bases, quality overview and an optional aligned quality-character row |
-| SAM / BAM | One entry per alignment, with SEQ, QUAL, reference, position, FLAG, MAPQ, CIGAR and optional fields |
-| gzip / BGZF | Compressed text and BAM reading with persistent seek checkpoints |
+| 上下移动记录或序列光标 | ↑ / ↓，或 `j` / `k` |
+| 左右移动序列光标 | ← / →，或 `h` / `l` |
+| 上一条 / 下一条记录 | `[` / `]` |
+| 切换左侧列表 / 右侧序列焦点 | 鼠标点击，或 `Ctrl+h` / `Ctrl+l` |
+| 翻页，或跳到开头 / 末尾 | Page Up / Page Down，Home / End |
+| 按名称部分匹配搜索 | `/` 输入名称后按 Enter；`n` 跳到下一个匹配 |
+| 跳到当前序列的指定位置 | `:` 输入 1-based 坐标后按 Enter |
+| 下一个 / 上一个文件标签 | Tab / Shift+Tab |
+| 关闭当前文件标签 | `x` |
+| 选择并复制序列 | 鼠标拖选，或 `v` 后移动光标；`y` 复制 |
+| 显示 / 隐藏质量字符副行 | `Q` |
+| 帮助 / 文件 / 当前记录 / 统计 | `?` 或 F1 / F2 / F3 / F4 |
+| 取消任务并暂停后台索引 | 浏览界面中按 Esc |
+| 退出信息页 / 退出浏览器 | `q` |
 
-FASTA extensions include `.fa`, `.fasta`, `.fna`, `.fas`, `.fsa`, `.faa`, and `.pep`; FASTQ uses `.fq` or `.fastq`. Contents identify the record format. Extensions provide hints for empty files, while `.faa` and `.pep` explicitly select protein interpretation. Records are validated during parsing.
+鼠标滚轮滚动指针所在区域。信息页中可用 Tab 或左右方向键切换页面。完整按键说明在 `?` 帮助页中。
 
-FASTQ quality is Phred+33. Headers from Illumina, Nanopore, PacBio, and SRA are recognised, and the fields they carry are exposed; unrecognised headers remain available as plain text. For the current record, the browser shows mean, minimum, and maximum quality together with the Q30 percentage.
+`F4` 的统计页显示记录数、总长度及最短/最长/平均长度，并提供适用格式的 N50。GC 保留两位小数。统计按需在后台计算，尚未完成的扫描会显示状态。SAM/BAM 按每条比对记录计数，不去重，也不显示 N50。
 
-SAM/BAM records keep the sequence in its stored orientation. Alignments that share a QNAME stay separate rather than being merged, and missing sequence or quality is shown explicitly.
+## 从 yazi 打开
 
-## Browser layout
+安装后，确保 yazi 能从 PATH 找到 `sq`，再将对应示例合并到 `~/.config/yazi/yazi.toml`。
 
-```text
-┌─ File tabs ───────────────────────────────────────────┐
-│ Record list       │ Header and record properties      │
-│                   │ Quality overview, when available  │
-│                   │ Position  Sequence                │
-│                   │           Quality characters      │
-├───────────────────────────────────────────────────────┤
-│ Reading status and keyboard shortcuts                 │
-└───────────────────────────────────────────────────────┘
-```
-
-Sequence lines wrap to the terminal width. Positions are 1-based and shown in a separate gutter. Resizing keeps both the sequence position and the selection coordinates. Every open file keeps its own record, viewport, and selection while you switch tabs.
-
-The information panel has four pages: **Help**, **File**, **Current record**, and **Statistics**. The current-record page shows the full header along with its parsed properties.
-
-## Controls
-
-| Action | Key or mouse operation |
+| yazi 版本 | 配置示例 |
 | --- | --- |
-| Move through records or sequence rows | Up / Down or `j` / `k` |
-| Move the sequence cursor horizontally | Left / Right or `h` / `l` |
-| Focus record list / sequence | `Ctrl+h` / `Ctrl+l`, or click the pane |
-| Focus sequence from the record list | Enter or Right |
-| Previous / next record | `[` / `]` |
-| Page through the focused pane | Page Up / Page Down |
-| First / last record or sequence position | Home / End |
-| Search record names by partial match | `/`, enter a name, then Enter |
-| Next name match | `n` |
-| Jump within the current sequence | `:`, enter a 1-based position, then Enter |
-| Next / previous file | Tab / Shift+Tab |
-| Close the current file | `x` |
-| Help / file / current record / statistics | F1 or `?` / F2 / F3 / F4 |
-| Change information page | Tab / Shift+Tab or Left / Right |
-| Select sequence | Mouse drag, or `v` followed by cursor movement |
-| Copy | `y` |
-| Show / hide quality characters | `Q` |
-| Cancel work and pause background indexing | Esc in the browser |
-| Return from an information panel | `q` |
-| Quit the browser | `q` in the browser, or Ctrl+C |
+| 25.4 | [contrib/yazi.toml](contrib/yazi.toml) |
+| 26.9 | [contrib/yazi-26.toml](contrib/yazi-26.toml) |
 
-The mouse wheel scrolls the pane under the pointer. A sequence drag can cross display lines, and dragging past a viewport edge scrolls the selection. Inside the information panel, Esc closes the panel and cancels background work; inside an input prompt, Esc closes that prompt.
+配置中的 opener 使用 `block = true`。选中文件按 Enter，`sq` 就会接管当前终端；退出后返回 yazi 原来的界面。
 
-## Copying
+## 复制序列
 
-`y` copies from whichever pane has focus:
+FASTA/FASTQ 中，`y` 根据当前焦点复制内容。
 
-| Location | Clipboard content |
+| 位置 | 复制结果 |
 | --- | --- |
-| FASTA record list | Full header and complete sequence, wrapped at 60 characters |
-| FASTQ record list | Full header, sequence, original separator line and quality |
-| Sequence pane | Selected sequence characters, without display line breaks, positions or quality characters |
-| Information panel | Selected text, or the current page when no text is selected |
+| FASTA 左侧记录列表 | 完整 header 和完整序列，每行 60 个字符 |
+| FASTQ 左侧记录列表 | 完整 FASTQ 记录，保留原始 header 和分隔行 |
+| 右侧序列选区 | 连续序列，不包含显示换行、位置编号和质量副行 |
+| 信息页 | 所选文字；没有选区时复制当前页 |
 
-**Copying is disabled entirely for SAM/BAM**, including in the information panel.
+**SAM/BAM 禁用全部复制功能，包括信息页。**
 
-Copying a whole record reads the record in full before sending it to the clipboard. Locally, copying uses `pbcopy` on macOS and `wl-copy`, `xclip`, or `xsel` on Linux. Over SSH, it sends an OSC 52 clipboard request to the terminal.
+本地优先使用系统剪贴板：macOS 的 `pbcopy`，Linux 的 `wl-copy`、`xclip` 或 `xsel`。SSH 下通过 OSC 52 请求本地终端写入剪贴板，需要终端支持。复制完整记录会读取并暂存整条记录的内容。
 
-## Large files and statistics
+## 大文件与缓存
 
-The first viewport is read before the full scan begins. One UI thread handles drawing and input, while a single background worker handles reading, indexing, search, and statistics; the two communicate through Rust message channels. The worker prioritises the active file and checks for new requests between bounded scan steps.
+`sq` 先读取首屏，再逐块建立索引。记录列表和序列内容按当前窗口加载，浏览时不把整个文件装入内存。索引与压缩检查点会保存下来，再次打开可继续使用；源文件变化后会使旧索引失效。首次访问尚未索引的远处位置，仍需推进扫描或解压。
 
-Record metadata and sequence intervals live in a paged SQLite index, while sequence content stays in the source file. The UI receives only a bounded window of sequence and a page of record names.
+缓存位于 `$XDG_CACHE_HOME/seqviz-rs/`，默认是 `~/.cache/seqviz-rs/`。缓存退出后仍保留，不会自动清理；关闭所有 `sq` 后可手动删除，再次打开时会重建。普通 gzip 使用解压检查点，不生成完整解压副本。
 
-| Input storage | Positioning method |
-| --- | --- |
-| Uncompressed | Source byte offsets and indexed sequence intervals |
-| BGZF | Compression-block checkpoints |
-| Ordinary gzip | Persistent DEFLATE positions, bit offsets, 32 KiB dictionaries and checksum state |
+原始文件保持只读。将 FASTA 输出重定向到文件或管道时，`sq` 会输出文本；其他格式需要交互终端。
 
-Partial and completed indexes can both be reused. When a file changes, a source-identity check invalidates the stale index. Reading an ordinary gzip file never creates a full uncompressed copy.
+## 配色
 
-Open **Statistics** with `F4` to request file-wide results. Totals that are still unknown during the scan are marked as partial. The displayed metrics are:
+默认主题开箱可用。需要调整颜色时，将 [config/config.toml](config/config.toml) 和 [config/content.toml](config/content.toml) 放到 `~/.config/seqviz-rs/`；设置了绝对路径的 `XDG_CONFIG_HOME` 时，使用其下的 `seqviz-rs/` 目录。
 
-- Record count, total length, minimum and maximum length, and mean length.
-- N50 for FASTA and FASTQ.
-- GC as `(G + C) / all sequence characters`, including ambiguous characters and gaps, displayed to two decimal places. Protein GC is not applicable.
+`config.toml` 配置背景、边框等界面颜色，并引用 `content.toml` 中的碱基、氨基酸和质量配色。
 
-SAM/BAM statistics count every alignment, including secondary and supplementary records, and do not deduplicate. Sequence metrics skip records with no SEQ, and N50 is not shown.
+## 文档
 
-Recoverable SAM errors are counted and reported with their positions. If the structure is unrecoverable, scanning that file stops but the content already indexed remains available, and the other tabs keep working.
-
-## Configuration
-
-Configuration is optional: the built-in theme works without any files.
-
-To customise colours, put [config/config.toml](config/config.toml) and [config/content.toml](config/content.toml) in `$XDG_CONFIG_HOME/seqviz-rs/`, or in `~/.config/seqviz-rs/` when `XDG_CONFIG_HOME` is unset:
-
-```text
-seqviz-rs/
-├── config.toml
-└── content.toml
-```
-
-The main configuration sets the interface colours and points to a separate content palette:
-
-```toml
-[display]
-show_quality = true
-
-[theme]
-content = "content.toml"
-background = "#181b23"
-foreground = "#e0e5ef"
-```
-
-Content-palette paths are relative to the main configuration file. The palette defines nucleotide and amino-acid categories plus inclusive minimum Phred-score thresholds; omitted fields keep their defaults. There is a single configurable theme and no in-app theme switching.
-
-Reading caches live in `$XDG_CACHE_HOME/seqviz-rs/`, falling back to `~/.cache/seqviz-rs/`.
-
-## Yazi integration
-
-Install `sq` on your PATH, then merge the matching opener example into your Yazi configuration:
-
-| Yazi configuration syntax | Example |
-| --- | --- |
-| Yazi 25.4: `name` rules and shell arguments | [contrib/yazi.toml](contrib/yazi.toml) |
-| Yazi 26.9: `url` rules and `%s` placeholders | [contrib/yazi-26.toml](contrib/yazi-26.toml) |
-
-The opener sets `block = true`, so pressing Enter on a supported file opens `sq` in the same terminal and quitting returns you to Yazi. The integration is an opener, not a preview plugin.
-
-## Code structure
-
-| Module | Responsibility |
-| --- | --- |
-| [src/main.rs](src/main.rs) | CLI entry point and terminal/printing mode selection |
-| [src/ui/](src/ui/) | Browser state, input handling, layout and rendering |
-| [src/worker.rs](src/worker.rs) | Background scheduling, cancellation and UI messages |
-| [src/data.rs](src/data.rs), [src/data/](src/data/) | Format parsing, SQLite record/interval indexes, range reads, statistics and record copying |
-| [src/source.rs](src/source.rs) | Seekable plain, gzip and BGZF input |
-| [src/headers.rs](src/headers.rs) | FASTQ header metadata parsing |
-| [src/config.rs](src/config.rs) | Main theme and content-palette loading |
-| [src/clipboard.rs](src/clipboard.rs) | System clipboard and OSC 52 output |
-| [src/fa_reader.rs](src/fa_reader.rs), [src/display.rs](src/display.rs) | Streaming FASTA printing |
-
-The interface is built with **Ratatui** and **Crossterm**. Persistent indexes use **rusqlite/SQLite**, compressed input uses **zlib** through `libz-sys`, and configuration uses **Serde + TOML**. Background work uses `std::thread`, `mpsc` channels, and atomic cancellation flags.
-
-## Development and validation
-
-Run the Rust checks from the repository root:
-
-```sh
-cargo test --locked
-cargo clippy --locked --all-targets -- -D warnings
-cargo fmt --check
-```
-
-Tests cover record boundaries, wrapped FASTQ, compressed seeking, cache reuse and invalidation, background scheduling, and UI state. The SAM/BAM fixtures were generated with samtools, but running the tests does not require samtools.
-
-For interactive acceptance checks, [scripts/terminal_smoke.py](scripts/terminal_smoke.py) runs the release binary in a pseudo-terminal. It exercises navigation, search, position jumps, resizing, quality display, information pages, SAM/BAM copy restrictions, and terminal restoration. Its Python dependency is separate from the application:
-
-```sh
-python3 -m venv /tmp/seqviz-qa
-/tmp/seqviz-qa/bin/pip install pyte==0.8.2
-cargo build --release --locked
-/tmp/seqviz-qa/bin/python scripts/terminal_smoke.py
-```
-
-[GitHub Actions](.github/workflows/check.yml) defines these checks for Linux and macOS. [docs/performance.md](docs/performance.md) records measurements on generated data along with the commands to reproduce them; [examples/measure.rs](examples/measure.rs) measures data-layer startup, scanning, and indexed reads.
-
-The [product manual](docs/product-manual.md) records the v1 design. VCF, editing, pasting, source-file writes, reference pileups, runtime file addition, and session restoration are reserved for later work.
+- [产品手册](docs/product-manual.md)：功能范围与显示规则。
+- [架构说明](docs/architecture.md)：代码入口和模块关系。
+- [性能记录](docs/performance.md)：测量条件与复现命令。
