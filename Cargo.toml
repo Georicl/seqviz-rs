@@ -8,4 +8,18 @@ name = "sq"
 path = "src/main.rs"
 
 [dependencies]
-crossterm = "0.29.0"
+terminal_size = "0.4.4"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+rusqlite = { version = "0.32.1", features = ["bundled", "hooks"] }
+libz-sys = "1"
+libc = "0.2"
+crc32fast = "1"
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+base64 = "0.22"
+unicode-width = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,16 @@
+# Copy this file and content.toml to ~/.config/seqviz-rs/.
+# When XDG_CONFIG_HOME is set, use $XDG_CONFIG_HOME/seqviz-rs/ instead.
+# All fields are optional; omitted fields retain the built-in default.
+
+[display]
+show_quality = true
+
+[theme]
+# Relative paths are resolved against this configuration file's directory.
+content = "content.toml"
+background = "#181b23"
+foreground = "#e0e5ef"
+muted = "#8f9bb3"
+border = "#47546e"
+focus = "#7ab7ff"
+selection = "#3e4d6c"

@@ -1,0 +1,42 @@
+# Semantic colours, independent of the interface layout.
+# Names such as "green" and RGB colours such as "#7ed397" are accepted.
+
+[nucleotides]
+a = "#7ed397"
+c = "#7ab7ff"
+g = "#f0c674"
+t = "#f18594"
+u = "#f18594"
+ambiguous = "#be9bf3" # R Y S W K M B D H V N
+gap = "#8f9bb3"       # - .
+unknown = "#8f9bb3"
+
+[amino_acids]
+nonpolar = "#f0c674"  # A I L M V
+polar = "#7ed397"     # S T N Q C U
+acidic = "#f18594"    # D E
+basic = "#7ab7ff"     # K R H O
+aromatic = "#be9bf3"  # F W Y
+special = "#78d5d4"   # G P
+ambiguous = "#8f9bb3" # B Z J X
+stop = "#f18594"      # *
+gap = "#8f9bb3"       # - .
+unknown = "#8f9bb3"
+
+# Inclusive minimum Phred scores (Phred+33 is decoded before colouring).
+# Include min=0; thresholds must be unique and lie between 0 and 93.
+[[quality]]
+min = 0
+color = "#f18594"
+
+[[quality]]
+min = 10
+color = "#f0c674"
+
+[[quality]]
+min = 20
+color = "#7ab7ff"
+
+[[quality]]
+min = 30
+color = "#7ed397"
