@@ -2,9 +2,10 @@
 
 use std::io::{self, BufRead};
 
-use rusqlite::{OptionalExtension, params};
-
-use super::{BAM_BASES, CHUNK, Dataset, invalid, sql};
+use super::{
+    BAM_BASES, CHUNK, invalid,
+    scan::{RecordSink, ScanInput, SpanEncoding, SpanKind},
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -83,13 +84,18 @@ impl BamScanner {
         }
     }
 
-    pub fn step(&mut self, data: &mut Dataset, budget: usize) -> io::Result<bool> {
-        let begin = data.position;
-        while data.position - begin < budget as u64 {
-            let left = budget - (data.position - begin) as usize;
+    pub fn step<R: BufRead>(
+        &mut self,
+        input: &mut ScanInput<'_, R>,
+        records: &mut impl RecordSink,
+        budget: usize,
+    ) -> io::Result<bool> {
+        let begin = input.position();
+        while input.position() - begin < budget as u64 {
+            let left = budget - (input.position() - begin) as usize;
             match self.phase {
                 Phase::Magic => {
-                    if self.fill(data, 4, left)? {
+                    if self.fill(input, 4, left)? {
                         if self.take().as_slice() != b"BAM\x01" {
                             return Err(invalid("Invalid BAM magic"));
                         }
@@ -97,7 +103,7 @@ impl BamScanner {
                     }
                 }
                 Phase::HeaderLength => {
-                    if self.fill(data, 4, left)? {
+                    if self.fill(input, 4, left)? {
                         self.remaining = nonnegative(&self.take(), "BAM header length")?;
                         self.phase = Phase::HeaderText;
                     }
@@ -107,23 +113,23 @@ impl BamScanner {
                         self.phase = Phase::ReferenceCount;
                         continue;
                     }
-                    let bytes = self.read(data, self.remaining.min(left))?;
+                    let bytes = self.read(input, self.remaining.min(left))?;
                     self.remaining -= bytes.len();
                 }
                 Phase::ReferenceCount => {
-                    if self.fill(data, 4, left)? {
+                    if self.fill(input, 4, left)? {
                         self.references = nonnegative(&self.take(), "BAM reference count")? as i32;
                         self.reference = 0;
-                        data.db.execute("DELETE FROM refs", []).map_err(sql)?;
+                        records.clear_references()?;
                         if self.references == 0 {
-                            self.end_header(data)?;
+                            self.end_header(records, input.position())?;
                         } else {
                             self.phase = Phase::ReferenceNameLength;
                         }
                     }
                 }
                 Phase::ReferenceNameLength => {
-                    if self.fill(data, 4, left)? {
+                    if self.fill(input, 4, left)? {
                         self.remaining = nonnegative(&self.take(), "BAM reference name length")?;
                         if self.remaining == 0 {
                             return Err(invalid("Empty BAM reference name"));
@@ -132,48 +138,43 @@ impl BamScanner {
                     }
                 }
                 Phase::ReferenceName => {
-                    if self.fill(data, self.remaining, left)? {
+                    if self.fill(input, self.remaining, left)? {
                         self.name = nul_string(&self.take())?;
                         self.phase = Phase::ReferenceLength;
                     }
                 }
                 Phase::ReferenceLength => {
-                    if self.fill(data, 4, left)? {
+                    if self.fill(input, 4, left)? {
                         let length = nonnegative(&self.take(), "BAM reference length")?;
-                        data.db
-                            .execute(
-                                "INSERT INTO refs VALUES(?,?,?)",
-                                params![self.reference, self.name, length as u64],
-                            )
-                            .map_err(sql)?;
+                        records.add_reference(self.reference, &self.name, length as u64)?;
                         self.reference += 1;
                         if self.reference == self.references {
-                            self.end_header(data)?;
+                            self.end_header(records, input.position())?;
                         } else {
                             self.phase = Phase::ReferenceNameLength;
                         }
                     }
                 }
                 Phase::RecordSize => {
-                    if self.buffer.is_empty() && data.reader.fill_buf()?.is_empty() {
+                    if self.buffer.is_empty() && input.available()?.is_empty() {
                         return Ok(true);
                     }
-                    if self.fill(data, 4, left)? {
+                    if self.fill(input, 4, left)? {
                         let size = nonnegative(&self.take(), "BAM block size")?;
                         if size < 32 {
                             return Err(invalid(
                                 "BAM alignment block is shorter than its fixed fields",
                             ));
                         }
-                        self.record_end = data
-                            .position
+                        self.record_end = input
+                            .position()
                             .checked_add(size as u64)
                             .ok_or_else(|| invalid("BAM block position overflow"))?;
                         self.phase = Phase::Core;
                     }
                 }
                 Phase::Core => {
-                    if self.fill(data, 32, left)? {
+                    if self.fill(input, 32, left)? {
                         let core = self.take();
                         self.core.copy_from_slice(&core);
                         let bin_mq_nl = u32_at(&self.core, 8);
@@ -185,7 +186,7 @@ impl BamScanner {
                             + 4 * self.cigar_count as u64
                             + self.sequence_len.div_ceil(2) as u64
                             + self.sequence_len as u64;
-                        if self.name_len == 0 || data.position + required > self.record_end {
+                        if self.name_len == 0 || input.position() + required > self.record_end {
                             return Err(invalid("BAM alignment fields exceed its block length"));
                         }
                         self.sequence_done = 0;
@@ -196,11 +197,11 @@ impl BamScanner {
                     }
                 }
                 Phase::Name => {
-                    if self.fill(data, self.name_len, left)? {
+                    if self.fill(input, self.name_len, left)? {
                         let name = nul_string(&self.take())?;
-                        self.fields = self.core_fields(data)?;
-                        data.begin_record(name, self.sequence_len > 0)?;
-                        data.set_fields(data.current.as_ref().unwrap().id, &self.fields)?;
+                        self.fields = self.core_fields(records)?;
+                        records.begin_record(name, self.sequence_len > 0)?;
+                        records.set_fields(&self.fields)?;
                         self.phase = Phase::Cigar;
                     }
                 }
@@ -210,7 +211,7 @@ impl BamScanner {
                         self.phase = Phase::Sequence;
                         continue;
                     }
-                    if self.fill(data, 4, left)? {
+                    if self.fill(input, 4, left)? {
                         let value = u32_at(&self.take(), 0);
                         cigar_op(&mut self.cigar, value)?;
                         self.cigar_count -= 1;
@@ -222,8 +223,8 @@ impl BamScanner {
                         self.phase = Phase::Quality;
                         continue;
                     }
-                    let offset = data.position;
-                    let bytes = self.read(data, self.remaining.min(left).min(CHUNK))?;
+                    let offset = input.position();
+                    let bytes = self.read(input, self.remaining.min(left).min(CHUNK))?;
                     self.remaining -= bytes.len();
                     let decoded: Vec<u8> = bytes
                         .iter()
@@ -231,15 +232,21 @@ impl BamScanner {
                         .take(self.sequence_len - self.sequence_done)
                         .collect();
                     self.sequence_done += decoded.len();
-                    data.append(&bytes, offset, 0, 1, &decoded)?;
+                    records.append(
+                        &bytes,
+                        offset,
+                        SpanKind::Sequence,
+                        SpanEncoding::BamSequence,
+                        &decoded,
+                    )?;
                 }
                 Phase::Quality => {
                     if self.remaining == 0 {
                         self.phase = Phase::AuxHeader;
                         continue;
                     }
-                    let offset = data.position;
-                    let bytes = self.read(data, self.remaining.min(left).min(CHUNK))?;
+                    let offset = input.position();
+                    let bytes = self.read(input, self.remaining.min(left).min(CHUNK))?;
                     self.remaining -= bytes.len();
                     let missing = *self.quality_missing.get_or_insert(bytes[0] == 255);
                     if missing {
@@ -253,11 +260,17 @@ impl BamScanner {
                             return Err(invalid("BAM Phred quality is outside 0..93"));
                         }
                         let decoded: Vec<u8> = bytes.iter().map(|b| b + 33).collect();
-                        data.append(&bytes, offset, 1, 2, &decoded)?;
+                        records.append(
+                            &bytes,
+                            offset,
+                            SpanKind::Quality,
+                            SpanEncoding::BamQuality,
+                            &decoded,
+                        )?;
                     }
                 }
                 Phase::AuxHeader => {
-                    if data.position == self.record_end && self.buffer.is_empty() {
+                    if input.position() == self.record_end && self.buffer.is_empty() {
                         let cigar = if self.cigar.is_empty() {
                             "*".to_owned()
                         } else {
@@ -268,13 +281,13 @@ impl BamScanner {
                             .find(|(key, _)| key == "CIGAR")
                             .unwrap()
                             .1 = cigar;
-                        data.set_fields(data.current.as_ref().unwrap().id, &self.fields)?;
-                        data.end_record(data.position)?;
+                        records.set_fields(&self.fields)?;
+                        records.end_record(input.position())?;
                         self.phase = Phase::RecordSize;
                         self.record_end = 0;
                         continue;
                     }
-                    if self.fill(data, 3, left)? {
+                    if self.fill(input, 3, left)? {
                         let header = self.take();
                         if !header[0].is_ascii_alphabetic() || !header[1].is_ascii_alphanumeric() {
                             return Err(invalid("Invalid BAM auxiliary tag"));
@@ -294,7 +307,7 @@ impl BamScanner {
                 }
                 Phase::AuxScalar => {
                     let size = scalar_size(self.aux_type)?;
-                    if self.fill(data, size, left)? {
+                    if self.fill(input, size, left)? {
                         let bytes = self.take();
                         let kind = if b"cCsSiI".contains(&self.aux_type) {
                             'i'
@@ -309,19 +322,17 @@ impl BamScanner {
                     }
                 }
                 Phase::AuxString => {
-                    if data.position >= self.record_end {
+                    if input.position() >= self.record_end {
                         return Err(invalid("Unterminated BAM auxiliary string"));
                     }
-                    let available = data.reader.fill_buf()?;
-                    let max = left
-                        .min(CHUNK)
-                        .min((self.record_end - data.position) as usize)
-                        .min(available.len());
+                    let remaining = (self.record_end - input.position()) as usize;
+                    let available = input.available()?;
+                    let max = left.min(CHUNK).min(remaining).min(available.len());
                     if max == 0 {
                         return Err(invalid("Truncated BAM auxiliary string"));
                     }
                     let zero = available[..max].iter().position(|b| *b == 0);
-                    let bytes = self.read(data, zero.map_or(max, |p| p + 1))?;
+                    let bytes = self.read(input, zero.map_or(max, |p| p + 1))?;
                     let part = if zero.is_some() {
                         &bytes[..bytes.len() - 1]
                     } else {
@@ -340,7 +351,7 @@ impl BamScanner {
                     }
                 }
                 Phase::AuxArrayHeader => {
-                    if self.fill(data, 5, left)? {
+                    if self.fill(input, 5, left)? {
                         let bytes = self.take();
                         self.aux_subtype = bytes[0];
                         if !b"cCsSiIf".contains(&self.aux_subtype) {
@@ -349,7 +360,7 @@ impl BamScanner {
                         self.aux_count = nonnegative(&bytes[1..], "BAM array element count")?;
                         let bytes_needed =
                             self.aux_count as u64 * scalar_size(self.aux_subtype)? as u64;
-                        if data.position + bytes_needed > self.record_end {
+                        if input.position() + bytes_needed > self.record_end {
                             return Err(invalid("BAM auxiliary array exceeds its alignment block"));
                         }
                         self.aux_value = format!("B:{}", char::from(self.aux_subtype));
@@ -371,7 +382,7 @@ impl BamScanner {
                         self.phase = Phase::AuxHeader;
                         continue;
                     }
-                    if self.fill(data, scalar_size(self.aux_subtype)?, left)? {
+                    if self.fill(input, scalar_size(self.aux_subtype)?, left)? {
                         let bytes = self.take();
                         if self.aux_tag == "CG" && self.aux_subtype == b'I' {
                             cigar_op(&mut self.aux_cigar, u32_at(&bytes, 0))?;
@@ -388,27 +399,31 @@ impl BamScanner {
         Ok(false)
     }
 
-    fn end_header(&mut self, data: &mut Dataset) -> io::Result<()> {
-        data.set_meta("bam_header", &data.position.to_string())?;
-        data.set_meta("resume", &data.position.to_string())?;
+    fn end_header(&mut self, records: &mut impl RecordSink, position: u64) -> io::Result<()> {
+        records.finish_header(position)?;
         self.phase = Phase::RecordSize;
         Ok(())
     }
 
-    fn read(&self, data: &mut Dataset, amount: usize) -> io::Result<Vec<u8>> {
-        if self.record_end > 0 && data.position + amount as u64 > self.record_end {
+    fn read<R: BufRead>(&self, input: &mut ScanInput<'_, R>, amount: usize) -> io::Result<Vec<u8>> {
+        if self.record_end > 0 && input.position() + amount as u64 > self.record_end {
             return Err(invalid("BAM field exceeds its alignment block"));
         }
-        let bytes = data.take_bytes(amount)?;
+        let bytes = input.take_bytes(amount)?;
         if bytes.is_empty() {
             return Err(invalid("Truncated BAM structure"));
         }
         Ok(bytes)
     }
 
-    fn fill(&mut self, data: &mut Dataset, needed: usize, budget: usize) -> io::Result<bool> {
+    fn fill<R: BufRead>(
+        &mut self,
+        input: &mut ScanInput<'_, R>,
+        needed: usize,
+        budget: usize,
+    ) -> io::Result<bool> {
         if self.buffer.len() < needed {
-            let bytes = self.read(data, (needed - self.buffer.len()).min(budget))?;
+            let bytes = self.read(input, (needed - self.buffer.len()).min(budget))?;
             self.buffer.extend_from_slice(&bytes);
         }
         Ok(self.buffer.len() == needed)
@@ -418,9 +433,9 @@ impl BamScanner {
         std::mem::take(&mut self.buffer)
     }
 
-    fn core_fields(&self, data: &Dataset) -> io::Result<Vec<(String, String)>> {
-        let reference = reference_name(data, i32_at(&self.core, 0))?;
-        let mate = reference_name(data, i32_at(&self.core, 20))?;
+    fn core_fields(&self, records: &impl RecordSink) -> io::Result<Vec<(String, String)>> {
+        let reference = records.reference_name(i32_at(&self.core, 0))?;
+        let mate = records.reference_name(i32_at(&self.core, 20))?;
         let flag = u32_at(&self.core, 12) >> 16;
         let pos = i32_at(&self.core, 4);
         let next = i32_at(&self.core, 24);
@@ -445,17 +460,6 @@ impl BamScanner {
             ),
         ])
     }
-}
-
-fn reference_name(data: &Dataset, id: i32) -> io::Result<String> {
-    if id == -1 {
-        return Ok("*".into());
-    }
-    data.db
-        .query_row("SELECT name FROM refs WHERE id=?", [id], |r| r.get(0))
-        .optional()
-        .map_err(sql)?
-        .ok_or_else(|| invalid("BAM references an unknown reference sequence"))
 }
 
 fn nul_string(bytes: &[u8]) -> io::Result<String> {

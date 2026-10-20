@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 """Real PTY acceptance checks. Requires pyte; build with cargo build --release first."""
-import errno, fcntl, os, select, signal, struct, subprocess, sys, tempfile, termios, time
+import base64, errno, fcntl, os, re, select, signal, struct, subprocess, sys, tempfile, termios, time
 from pathlib import Path
 import pyte
 
 root = Path(__file__).resolve().parent.parent
+binary = Path(os.environ.get('SQ_BIN', root / 'target/release/sq'))
 out = Path(tempfile.gettempdir()) / 'seqviz-ui-acceptance'
 out.mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='seqviz-ui-') as tmp:
     tmp = Path(tmp)
     fa = tmp / 'sequence.fa'
-    fa.write_text('>seq1 description\n' + 'ACGT' * 200 + '\n>seq2\nTTTTCCCC\n')
+    fa.write_text('>seq1 description\n' + 'ACGT' * 2000 + '\n>seq2\nTTTTCCCC\n')
     fq = tmp / 'reads.fastq'
     fq.write_text('@INST:1:FLOW:2:3:4:5 1:N:0:ACGT\n' + 'ACGT' * 40 + '\n+\n' + '!5I~' * 40 + '\n')
     master, slave = os.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 28, 100, 0, 0))
     original = termios.tcgetattr(slave)
-    env = {**os.environ, 'TERM':'xterm-256color', 'XDG_CACHE_HOME':str(tmp/'cache'), 'XDG_CONFIG_HOME':str(tmp/'config')}
-    process = subprocess.Popen([str(root/'target/release/sq'), str(fa), str(fq), str(root/'test/alignments.sam'), str(root/'test/alignments.bam')], stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True)
+    env = {**os.environ, 'TERM':'xterm-256color', 'SSH_CONNECTION':'seqviz-pty-check', 'XDG_CACHE_HOME':str(tmp/'cache'), 'XDG_CONFIG_HOME':str(tmp/'config')}
+    process = subprocess.Popen([str(binary), str(fa), str(fq), str(root/'test/alignments.sam'), str(root/'test/alignments.bam')], stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True)
     screen = pyte.Screen(100, 28)
     stream = pyte.Stream(screen)
     raw = bytearray()
@@ -57,7 +58,34 @@ with tempfile.TemporaryDirectory(prefix='seqviz-ui-') as tmp:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 70, 0, 0))
         screen.resize(lines=24, columns=70)
         process.send_signal(signal.SIGWINCH)
-        wait_for(lambda s:'seq1 description' in s and 'ACGTACGT' in s and len(screen.display[0])==70, '05-resize')
+        wait_for(lambda s:'seq1 description' in s and 'ACGTACGT' in s and '│' == screen.display[6][17] and re.search(r'\d+\s+[ACGT]{40,}│$', screen.display[20]) and screen.display[23].startswith('? help'), '05-resize')
+        # Hold a drag at the lower edge without sending further mouse movement.
+        # The selection must extend as the viewport scrolls.
+        # The mouse press replaces the previous selection. A bare Escape here
+        # can merge with the following mouse escape sequence in the PTY parser.
+        rows = []
+        for y, line in enumerate(screen.display):
+            match = re.search(r'(\d+)\s+([ACGT]{6,})', line)
+            if match: rows.append((y, match))
+        assert len(rows) > 2, content()
+        top_y, top = rows[0]
+        bottom_y, bottom = rows[-1]
+        x = top.start(2)
+        initial_length = int(bottom.group(1)) - int(top.group(1)) + 1
+        send(f'\x1b[<0;{x+1};{top_y+1}M'.encode())
+        for _ in range(3): read()
+        send(f'\x1b[<32;{x+1};{bottom_y+1}M'.encode())
+        deadline = time.monotonic() + .7
+        while time.monotonic() < deadline: read()
+        send(f'\x1b[<0;{x+1};{bottom_y+1}m'.encode())
+        send(b'y')
+        wait_for(lambda s:'OSC 52' in s, '05b-edge-drag-copy')
+        copies = re.findall(rb'\x1b\]52;c;([^\x07]*)\x07', bytes(raw))
+        assert copies, 'No clipboard request was emitted'
+        copied = base64.b64decode(copies[-1])
+        assert len(copied) > initial_length, (len(copied), initial_length)
+        assert not re.search(rb'[^ACGT]', copied), copied[:100]
+        print('Edge drag expanded selection from %d to %d bases' % (initial_length, len(copied)), flush=True)
         send(b'?')
         wait_for(lambda s:'Help' in s and 'BROWSE' in s, '06-help')
         send(b'q\x1b[14~')

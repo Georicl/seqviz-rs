@@ -1,6 +1,9 @@
 use std::io::{self, BufRead};
 
-use super::{CHUNK, Dataset, Format, invalid};
+use super::{
+    CHUNK, Format, invalid,
+    scan::{RecordSink, ScanInput, SpanEncoding, SpanKind},
+};
 
 pub(super) struct TextScanner {
     format: Format,
@@ -44,15 +47,20 @@ impl TextScanner {
         }
     }
 
-    pub fn step(&mut self, data: &mut Dataset, budget: usize) -> io::Result<bool> {
-        let begin = data.position;
-        while data.position - begin < budget as u64 {
-            let offset = data.position;
-            let available = data.reader.fill_buf()?;
+    pub fn step<R: BufRead>(
+        &mut self,
+        input: &mut ScanInput<'_, R>,
+        records: &mut impl RecordSink,
+        budget: usize,
+    ) -> io::Result<bool> {
+        let begin = input.position();
+        while input.position() - begin < budget as u64 {
+            let offset = input.position();
+            let remaining = budget - (input.position() - begin) as usize;
+            let available = input.available()?;
             if available.is_empty() {
-                return self.finish(data);
+                return self.finish(records, input.position());
             }
-            let remaining = budget - (data.position - begin) as usize;
             let count = available
                 .iter()
                 .position(|b| *b == b'\n')
@@ -60,13 +68,12 @@ impl TextScanner {
                 .min(remaining)
                 .min(CHUNK);
             let bytes = available[..count].to_vec();
-            data.reader.consume(count);
-            data.position += count as u64;
+            input.consume(count);
             let end_line = bytes.last() == Some(&b'\n');
             match self.format {
-                Format::Fasta => self.fasta(data, &bytes, offset, end_line)?,
-                Format::Fastq => self.fastq(data, &bytes, offset, end_line)?,
-                Format::Sam => self.sam(data, &bytes, offset)?,
+                Format::Fasta => self.fasta(records, &bytes, offset, end_line)?,
+                Format::Fastq => self.fastq(records, &bytes, offset, end_line)?,
+                Format::Sam => self.sam(records, &bytes, offset)?,
                 Format::Bam => unreachable!(),
             }
             self.line_start = end_line;
@@ -76,13 +83,13 @@ impl TextScanner {
 
     fn fasta(
         &mut self,
-        data: &mut Dataset,
+        records: &mut impl RecordSink,
         bytes: &[u8],
         offset: u64,
         end: bool,
     ) -> io::Result<()> {
         if self.line_start && bytes.first() == Some(&b'#') {
-            data.flush_span()?;
+            records.flush_span()?;
             self.comment = true;
         }
         if self.comment {
@@ -93,8 +100,8 @@ impl TextScanner {
         }
         let header = self.line_start && bytes.first() == Some(&b'>');
         if header {
-            if data.current.is_some() {
-                data.end_record(offset)?;
+            if records.current().is_some() {
+                records.end_record(offset)?;
             }
             self.phase = Phase::Header;
             self.text.clear();
@@ -103,14 +110,20 @@ impl TextScanner {
             self.text
                 .extend_from_slice(if header { &bytes[1..] } else { bytes });
             if end {
-                data.begin_record(defline(&self.text)?, true)?;
+                records.begin_record(defline(&self.text)?, true)?;
                 self.text.clear();
                 self.phase = Phase::Sequence;
             }
         } else {
             let bases = sequence(bytes, false)?;
             if !bases.is_empty() {
-                data.append(bytes, offset, 0, 0, &bases)?;
+                records.append(
+                    bytes,
+                    offset,
+                    SpanKind::Sequence,
+                    SpanEncoding::Text,
+                    &bases,
+                )?;
             }
         }
         Ok(())
@@ -118,7 +131,7 @@ impl TextScanner {
 
     fn fastq(
         &mut self,
-        data: &mut Dataset,
+        records: &mut impl RecordSink,
         bytes: &[u8],
         offset: u64,
         end: bool,
@@ -143,40 +156,46 @@ impl TextScanner {
             Phase::Header => {
                 self.text.extend_from_slice(content);
                 if end {
-                    data.begin_record(defline(&self.text)?, true)?;
+                    records.begin_record(defline(&self.text)?, true)?;
                     self.text.clear();
                     self.phase = Phase::Sequence;
                 }
             }
             Phase::Sequence => {
                 let bases = sequence(bytes, false)?;
-                data.append(bytes, offset, 0, 0, &bases)?;
+                records.append(
+                    bytes,
+                    offset,
+                    SpanKind::Sequence,
+                    SpanEncoding::Text,
+                    &bases,
+                )?;
             }
             Phase::Plus => {
                 self.text.extend_from_slice(bytes);
                 if end {
                     let plus = defline(&self.text)?;
-                    let id = data.current.as_ref().unwrap().id;
-                    data.db
-                        .execute(
-                            "UPDATE records SET plus=? WHERE id=?",
-                            rusqlite::params![plus, id],
-                        )
-                        .map_err(super::sql)?;
+                    records.set_plus(plus)?;
                     self.text.clear();
                     self.phase = Phase::Quality;
                 }
             }
             Phase::Quality => {
                 let quality = quality(bytes)?;
-                let current = data.current.as_ref().unwrap();
+                let current = records.current().unwrap();
                 if current.qlen + quality.len() as u64 > current.length {
                     return Err(invalid("FASTQ quality is longer than its sequence"));
                 }
-                data.append(bytes, offset, 1, 0, &quality)?;
-                let current = data.current.as_ref().unwrap();
+                records.append(
+                    bytes,
+                    offset,
+                    SpanKind::Quality,
+                    SpanEncoding::Text,
+                    &quality,
+                )?;
+                let current = records.current().unwrap();
                 if end && current.qlen == current.length {
-                    data.end_record(data.position)?;
+                    records.end_record(offset + bytes.len() as u64)?;
                     self.phase = Phase::Start;
                 }
             }
@@ -185,7 +204,7 @@ impl TextScanner {
         Ok(())
     }
 
-    fn sam(&mut self, data: &mut Dataset, bytes: &[u8], offset: u64) -> io::Result<()> {
+    fn sam(&mut self, records: &mut impl RecordSink, bytes: &[u8], offset: u64) -> io::Result<()> {
         let mut begin = 0;
         for (i, byte) in bytes.iter().enumerate() {
             if *byte != b'\t' && *byte != b'\n' {
@@ -193,71 +212,93 @@ impl TextScanner {
             }
             let part = &bytes[begin..i];
             let result = self
-                .sam_part(data, part, offset + begin as u64)
-                .and_then(|()| self.sam_field(data, *byte == b'\n'));
+                .sam_part(records, part, offset + begin as u64)
+                .and_then(|()| self.sam_field(records, *byte == b'\n'));
             if let Err(error) = result {
                 if error.kind() != io::ErrorKind::InvalidData {
                     return Err(error);
                 }
                 if !self.sam.bad {
-                    data.log_error(offset + begin as u64, &format!("SAM: {error}"))?;
+                    records.log_error(offset + begin as u64, &format!("SAM: {error}"))?;
                 }
                 self.sam.bad = true;
-                data.discard_current()?;
+                records.discard_current()?;
             }
             if *byte == b'\n' {
-                if !self.sam.bad && !self.sam.header && data.current.is_some() {
-                    data.end_record(offset + i as u64 + 1)?;
+                if !self.sam.bad && !self.sam.header && records.current().is_some() {
+                    records.end_record(offset + i as u64 + 1)?;
                 } else {
-                    data.set_meta("resume", &(offset + i as u64 + 1).to_string())?;
+                    records.set_resume(offset + i as u64 + 1)?;
                 }
                 self.sam = Sam::default();
             }
             begin = i + 1;
         }
         if begin < bytes.len()
-            && let Err(error) = self.sam_part(data, &bytes[begin..], offset + begin as u64)
+            && let Err(error) = self.sam_part(records, &bytes[begin..], offset + begin as u64)
         {
             if error.kind() != io::ErrorKind::InvalidData {
                 return Err(error);
             }
             if !self.sam.bad {
-                data.log_error(offset + begin as u64, &format!("SAM: {error}"))?;
+                records.log_error(offset + begin as u64, &format!("SAM: {error}"))?;
             }
             self.sam.bad = true;
-            data.discard_current()?;
+            records.discard_current()?;
         }
         Ok(())
     }
 
-    fn sam_part(&mut self, data: &mut Dataset, part: &[u8], offset: u64) -> io::Result<()> {
+    fn sam_part(
+        &mut self,
+        records: &mut impl RecordSink,
+        part: &[u8],
+        offset: u64,
+    ) -> io::Result<()> {
         if self.sam.bad || self.sam.header {
             return Ok(());
         }
         let content = part.strip_suffix(b"\r").unwrap_or(part);
         if self.sam.field == 9 {
-            if content == b"*" && data.current.as_ref().unwrap().length == 0 {
+            if content == b"*" && records.current().unwrap().length == 0 {
                 self.sam.sequence_star = true;
-                data.current.as_mut().unwrap().has_sequence = false;
+                records.set_sequence_missing();
             } else if !content.is_empty() {
                 if self.sam.sequence_star {
                     return Err(invalid("Invalid SEQ missing-value marker"));
                 }
                 let bases = sequence(content, true)?;
-                data.append(content, offset, 0, 0, &bases)?;
+                records.append(
+                    content,
+                    offset,
+                    SpanKind::Sequence,
+                    SpanEncoding::Text,
+                    &bases,
+                )?;
             }
         } else if self.sam.field == 10 {
-            if content == b"*" && data.current.as_ref().unwrap().qlen == 0 && !self.sam.quality_star
-            {
+            if content == b"*" && records.current().unwrap().qlen == 0 && !self.sam.quality_star {
                 // A single '*' is missing only when the complete field is one byte.
                 self.sam.quality_star = true;
             } else if !content.is_empty() {
                 if self.sam.quality_star {
-                    data.append(b"*", offset - 1, 1, 0, b"*")?;
+                    records.append(
+                        b"*",
+                        offset - 1,
+                        SpanKind::Quality,
+                        SpanEncoding::Text,
+                        b"*",
+                    )?;
                     self.sam.quality_star = false;
                 }
                 let scores = quality(content)?;
-                data.append(content, offset, 1, 0, &scores)?;
+                records.append(
+                    content,
+                    offset,
+                    SpanKind::Quality,
+                    SpanEncoding::Text,
+                    &scores,
+                )?;
             }
         } else {
             self.sam.token.extend_from_slice(content);
@@ -265,7 +306,7 @@ impl TextScanner {
         Ok(())
     }
 
-    fn sam_field(&mut self, data: &mut Dataset, end_line: bool) -> io::Result<()> {
+    fn sam_field(&mut self, records: &mut impl RecordSink, end_line: bool) -> io::Result<()> {
         if self.sam.bad || self.sam.header {
             return Ok(());
         }
@@ -287,16 +328,16 @@ impl TextScanner {
             self.sam.token.clear();
             if self.sam.field == 8 {
                 let attributes = sam_attributes(&self.sam.fields)?;
-                data.begin_record(self.sam.fields[0].clone(), true)?;
-                data.set_fields(data.current.as_ref().unwrap().id, &attributes)?;
+                records.begin_record(self.sam.fields[0].clone(), true)?;
+                records.set_fields(&attributes)?;
             }
         } else if self.sam.field == 9 {
-            let current = data.current.as_ref().unwrap();
+            let current = records.current().unwrap();
             if current.length == 0 && !self.sam.sequence_star {
                 return Err(invalid("Empty SEQ field; use * for missing sequence"));
             }
         } else if self.sam.field == 10 {
-            let current = data.current.as_ref().unwrap();
+            let current = records.current().unwrap();
             if !self.sam.quality_star && current.qlen != current.length {
                 return Err(invalid("SEQ and QUAL lengths differ"));
             }
@@ -320,28 +361,28 @@ impl TextScanner {
             }
             let mut fields = sam_attributes(&self.sam.fields)?;
             fields.append(&mut self.sam.aux);
-            data.set_fields(data.current.as_ref().unwrap().id, &fields)?;
+            records.set_fields(&fields)?;
         }
         self.sam.field += 1;
         Ok(())
     }
 
-    fn finish(&mut self, data: &mut Dataset) -> io::Result<bool> {
+    fn finish(&mut self, records: &mut impl RecordSink, position: u64) -> io::Result<bool> {
         match self.format {
             Format::Fasta => {
                 if self.phase == Phase::Header {
-                    data.begin_record(defline(&self.text)?, true)?;
+                    records.begin_record(defline(&self.text)?, true)?;
                 }
-                if data.current.is_some() {
-                    data.end_record(data.position)?;
+                if records.current().is_some() {
+                    records.end_record(position)?;
                 }
             }
             Format::Fastq => {
                 if self.phase != Phase::Start {
                     if self.phase == Phase::Quality
-                        && data.current.as_ref().is_some_and(|c| c.length == c.qlen)
+                        && records.current().is_some_and(|c| c.length == c.qlen)
                     {
-                        data.end_record(data.position)?;
+                        records.end_record(position)?;
                         self.phase = Phase::Start;
                     } else {
                         return Err(invalid(
@@ -352,18 +393,18 @@ impl TextScanner {
             }
             Format::Sam => {
                 if !self.line_start {
-                    if let Err(error) = self.sam_field(data, true) {
+                    if let Err(error) = self.sam_field(records, true) {
                         if error.kind() != io::ErrorKind::InvalidData {
                             return Err(error);
                         }
                         if !self.sam.bad {
-                            data.log_error(data.position, &format!("SAM: {error}"))?;
+                            records.log_error(position, &format!("SAM: {error}"))?;
                         }
                         self.sam.bad = true;
-                        data.discard_current()?;
+                        records.discard_current()?;
                     }
-                    if !self.sam.bad && data.current.is_some() {
-                        data.end_record(data.position)?;
+                    if !self.sam.bad && records.current().is_some() {
+                        records.end_record(position)?;
                     }
                 }
             }

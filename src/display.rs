@@ -1,9 +1,9 @@
-//! 按终端宽度逐行输出 FASTA，读取分块与显示换行各自处理。
-use crate::fa_reader::{FastaSequenceReader, read_header};
-use std::io::{self, BufRead, Write};
+//! Streaming FASTA output over the same indexed reader used by the browser.
+use crate::data::{Dataset, Format};
+use std::io::{self, Write};
 use terminal_size::{Width, terminal_size_of};
 
-const READ_CHUNK_SIZE: usize = 8192;
+const READ_CHUNK_SIZE: usize = 64 * 1024;
 const DEFAULT_WIDTH: usize = 80;
 
 /// 获取标准输出所在终端的列数；重定向输出时使用 80 列。
@@ -14,30 +14,58 @@ pub fn terminal_width() -> usize {
         .unwrap_or(DEFAULT_WIDTH)
 }
 
-/// 连续输出所有记录，每个序列行开始时重新获取显示宽度。
+/// Print FASTA records without materialising an entire sequence in memory.
+/// Format recognition, validation and gzip decoding belong to `Dataset`.
 pub fn write_fasta(
-    reader: &mut impl BufRead,
+    dataset: &mut Dataset,
     output: &mut impl Write,
     mut width: impl FnMut() -> usize,
 ) -> io::Result<()> {
-    while let Some(header) = read_header(reader)? {
-        writeln!(output, "{}", header.header)?;
-        let mut sequence = FastaSequenceReader::new(&mut *reader);
-        write_sequence(&mut sequence, output, &mut width)?;
+    if dataset.format() != Format::Fasta {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Redirected output supports FASTA only; open this format in an interactive terminal",
+        ));
     }
-    Ok(())
+    let mut id = 0;
+    loop {
+        if let Some(record) = dataset.record(id)? {
+            writeln!(output, ">{}", record.header)?;
+            write_sequence(dataset, id, output, &mut width)?;
+            id += 1;
+        } else if dataset.progress().complete {
+            return Ok(());
+        } else {
+            scan_step(dataset)?;
+        }
+    }
 }
 
 fn write_sequence(
-    sequence: &mut FastaSequenceReader<impl BufRead>,
+    dataset: &mut Dataset,
+    id: u64,
     output: &mut impl Write,
     width: &mut impl FnMut() -> usize,
 ) -> io::Result<()> {
     let mut column = 0;
     let mut line_width = 1;
-
+    let mut position = 0;
     loop {
-        let (chunk, finished) = sequence.read_chunk(READ_CHUNK_SIZE)?;
+        let record = dataset.record(id)?.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "Indexed record disappeared")
+        })?;
+        let count = record
+            .length
+            .saturating_sub(position)
+            .min(READ_CHUNK_SIZE as u64) as usize;
+        let chunk = dataset.read_range(id, position, count)?.sequence;
+        if chunk.len() != count {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Incomplete indexed sequence range",
+            ));
+        }
+        position += chunk.len() as u64;
         let mut offset = 0;
 
         while offset < chunk.len() {
@@ -55,24 +83,45 @@ fn write_sequence(
             }
         }
 
-        if finished {
+        if record.complete && position == record.length {
             if column > 0 {
                 output.write_all(b"\n")?;
             }
             return Ok(());
         }
+        if position == record.length {
+            scan_step(dataset)?;
+        }
     }
+}
+
+fn scan_step(dataset: &mut Dataset) -> io::Result<()> {
+    if let Some(error) = dataset.progress().error {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, error));
+    }
+    if let Some(error) = dataset.step(64 * 1024)?.error {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, error));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufReader, Cursor};
+    use std::fs;
+
+    fn render_with_width(input: &[u8], width: impl FnMut() -> usize) -> Vec<u8> {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.fa");
+        fs::write(&path, input).unwrap();
+        let mut dataset = Dataset::open(&path, &tmp.path().join("cache")).unwrap();
+        let mut output = Vec::new();
+        write_fasta(&mut dataset, &mut output, width).unwrap();
+        output
+    }
 
     fn render(input: &[u8], width: usize) -> String {
-        let mut output = Vec::new();
-        write_fasta(&mut Cursor::new(input), &mut output, || width).unwrap();
-        String::from_utf8(output).unwrap()
+        String::from_utf8(render_with_width(input, || width)).unwrap()
     }
 
     #[test]
@@ -95,7 +144,7 @@ mod tests {
 
     #[test]
     fn wrapping_is_independent_of_input_lines_and_read_chunks() {
-        let sequence = "AcgTN-.*".repeat(2050);
+        let sequence = "AcgTN-.*".repeat(20000);
         let input = format!(">long\n{sequence}\n");
         // 127 不整除读取块大小，显示行会跨过读取块边界。
         let expected = format!(
@@ -106,20 +155,14 @@ mod tests {
                 .map(|line| format!("{}\n", std::str::from_utf8(line).unwrap()))
                 .collect::<String>()
         );
-        let mut reader = BufReader::with_capacity(3, Cursor::new(input));
-        let mut output = Vec::new();
-        write_fasta(&mut reader, &mut output, || 127).unwrap();
+        let output = render_with_width(input.as_bytes(), || 127);
         assert_eq!(output, expected.as_bytes());
     }
 
     #[test]
     fn uses_updated_width_at_the_start_of_each_line() {
         let mut widths = [4, 2, 6].into_iter();
-        let mut output = Vec::new();
-        write_fasta(&mut Cursor::new(b">seq\nACGTACGTACGT"), &mut output, || {
-            widths.next().unwrap()
-        })
-        .unwrap();
+        let output = render_with_width(b">seq\nACGTACGTACGT", || widths.next().unwrap());
         assert_eq!(output, b">seq\nACGT\nAC\nGTACGT\n");
     }
 
@@ -128,5 +171,13 @@ mod tests {
         for width in [0, 1] {
             assert_eq!(render(b">seq\nACG", width), ">seq\nA\nC\nG\n");
         }
+    }
+
+    #[test]
+    fn uses_the_browser_sequence_normalisation() {
+        assert_eq!(
+            render(b">seq\nAC GT\tN\n# skipped\nac\n", 80),
+            ">seq\nACGTNac\n"
+        );
     }
 }

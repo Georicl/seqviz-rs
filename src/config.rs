@@ -8,6 +8,17 @@ use std::{
 use ratatui::style::Color;
 use serde::Deserialize;
 
+/// Resolve the cache location without creating it or opening any files.
+pub fn cache_directory() -> PathBuf {
+    if let Some(path) = env::var_os("XDG_CACHE_HOME") {
+        PathBuf::from(path).join("seqviz-rs")
+    } else if let Some(user_directory) = env::var_os("HOME") {
+        PathBuf::from(user_directory).join(".cache/seqviz-rs")
+    } else {
+        env::temp_dir().join("seqviz-rs")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub show_quality: bool,

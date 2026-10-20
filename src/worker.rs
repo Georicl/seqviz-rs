@@ -1,5 +1,12 @@
 //! One worker shares I/O time across tabs and checks for new input between scan blocks.
-use crate::data::{Dataset, Format, Progress, RecordMeta, RecordSummary, SequenceWindow, Stats};
+mod operations;
+mod protocol;
+#[cfg(test)]
+mod tests;
+
+use crate::data::{Dataset, Progress, SequenceWindow, Stats};
+use operations::{CopyJob, SearchJob};
+pub use protocol::{Request, Snapshot, Update, ViewRequest};
 use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
@@ -8,74 +15,11 @@ use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Debug)]
-pub struct ViewRequest {
-    pub token: u64,
-    pub file: usize,
-    pub record: u64,
-    pub start: u64,
-    pub count: usize,
-    pub list_start: u64,
-    pub list_count: usize,
-}
-
-#[derive(Clone, Debug)]
-pub struct Snapshot {
-    pub request: ViewRequest,
-    pub format: Format,
-    pub compression: String,
-    pub records: Vec<RecordSummary>,
-    pub record: Option<RecordMeta>,
-    pub window: SequenceWindow,
-    pub progress: Progress,
-    pub stats: Option<Stats>,
-    pub paused: bool,
-}
-
-pub enum Request {
-    View(ViewRequest),
-    Search {
-        token: u64,
-        file: usize,
-        query: String,
-        after: u64,
-    },
-    Statistics {
-        file: usize,
-    },
-    Copy {
-        token: u64,
-        file: usize,
-        record: u64,
-        range: Option<(u64, u64)>,
-    },
-    Cancel(usize),
-    Close(usize),
-    Quit,
-}
-
-pub enum Update {
-    View(Box<Snapshot>),
-    Selected {
-        token: u64,
-        file: usize,
-        record: u64,
-    },
-    Copied {
-        token: u64,
-        file: usize,
-        text: String,
-    },
-    Message {
-        file: usize,
-        text: String,
-    },
-}
-
 pub struct Worker {
     pub requests: mpsc::Sender<Request>,
     pub updates: mpsc::Receiver<Update>,
-    pub cancel_copy: Arc<AtomicBool>,
+    /// Cancels statistics / shutdown work. Each search or copy owns a separate flag.
+    pub cancel_background: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -83,17 +27,16 @@ impl Worker {
     pub fn start(paths: Vec<PathBuf>, cache: PathBuf) -> Self {
         let (send, receive) = mpsc::channel();
         let (updates, events) = mpsc::channel();
-        let cancel_copy = Arc::new(AtomicBool::new(false));
-        let cancel = Arc::clone(&cancel_copy);
+        let cancel_background = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::clone(&cancel_background);
         let thread = thread::spawn(move || run(paths, cache, receive, updates, cancel));
         Self {
             requests: send,
             updates: events,
-            cancel_copy,
+            cancel_background,
             thread: Some(thread),
         }
     }
-
     pub fn send(&self, request: Request) {
         let _ = self.requests.send(request);
     }
@@ -101,7 +44,7 @@ impl Worker {
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        self.cancel_copy.store(true, Ordering::Relaxed);
+        self.cancel_background.store(true, Ordering::Relaxed);
         let _ = self.requests.send(Request::Quit);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -114,6 +57,7 @@ const STATS_INTERVAL: Duration = Duration::from_secs(1);
 
 struct Slot {
     dataset: Dataset,
+    file_size: Option<u64>,
     failure: Option<String>,
     stats: Option<Stats>,
     stats_progress: Option<ProgressKey>,
@@ -134,7 +78,6 @@ struct ProgressKey {
     errors: u64,
     error: Option<String>,
 }
-
 impl From<&Progress> for ProgressKey {
     fn from(progress: &Progress) -> Self {
         Self {
@@ -147,231 +90,249 @@ impl From<&Progress> for ProgressKey {
     }
 }
 
-struct SearchJob {
-    token: u64,
-    file: usize,
-    query: String,
-    after: u64,
-    tried: Option<ProgressKey>,
-}
-
-struct CopyJob {
-    token: u64,
-    file: usize,
-    record: u64,
-    range: Option<(u64, u64)>,
-}
-
-fn run(
+struct Scheduler {
     paths: Vec<PathBuf>,
     cache: PathBuf,
-    requests: mpsc::Receiver<Request>,
+    owners: Vec<usize>,
+    slots: Vec<Option<Slot>>,
+    tabs: Vec<TabState>,
+    closed: Vec<bool>,
+    view: Option<ViewRequest>,
+    search: Option<SearchJob>,
+    copy: Option<CopyJob>,
+    last_operation_id: u64,
+    foreground_read: bool,
+    dirty: bool,
+    last_publish: Instant,
+    working: bool,
     updates: mpsc::Sender<Update>,
     cancel: Arc<AtomicBool>,
-) {
-    // Aliases retain separate UI state, but must never maintain two live
-    // scanners writing the same record database.
-    let mut canonical_owners = HashMap::new();
-    let owners: Vec<usize> = paths
-        .iter()
-        .enumerate()
-        .map(|(file, path)| {
-            let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
-            *canonical_owners.entry(canonical).or_insert(file)
-        })
-        .collect();
-    let mut slots: Vec<Option<Slot>> = (0..paths.len()).map(|_| None).collect();
-    let mut tabs: Vec<TabState> = (0..paths.len()).map(|_| TabState::default()).collect();
-    let mut closed = vec![false; paths.len()];
-    let mut view: Option<ViewRequest> = None;
-    let mut search: Option<SearchJob> = None;
-    let mut pending_copy: Option<CopyJob> = None;
-    let mut foreground_read = false;
-    let mut dirty = false;
-    let mut last_publish = Instant::now() - PUBLISH_INTERVAL;
-    let mut working = false;
-    loop {
-        // A completed or paused tab sleeps until a command arrives. While
-        // scanning, check commands between bounded steps without imposing a
-        // fixed delay on each block.
-        let timeout = if working {
+}
+
+impl Scheduler {
+    fn new(
+        paths: Vec<PathBuf>,
+        cache: PathBuf,
+        updates: mpsc::Sender<Update>,
+        cancel: Arc<AtomicBool>,
+    ) -> Self {
+        // Alias tabs keep separate view state and share one live index writer.
+        let mut canonical_owners = HashMap::new();
+        let owners = paths
+            .iter()
+            .enumerate()
+            .map(|(file, path)| {
+                let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+                *canonical_owners.entry(canonical).or_insert(file)
+            })
+            .collect();
+        let count = paths.len();
+        Self {
+            paths,
+            cache,
+            owners,
+            slots: (0..count).map(|_| None).collect(),
+            tabs: (0..count).map(|_| TabState::default()).collect(),
+            closed: vec![false; count],
+            view: None,
+            search: None,
+            copy: None,
+            last_operation_id: 0,
+            foreground_read: false,
+            dirty: false,
+            last_publish: Instant::now() - PUBLISH_INTERVAL,
+            working: false,
+            updates,
+            cancel,
+        }
+    }
+
+    fn timeout(&self) -> Duration {
+        if self.working {
             Duration::ZERO
-        } else if dirty {
-            PUBLISH_INTERVAL.saturating_sub(last_publish.elapsed())
+        } else if self.dirty {
+            PUBLISH_INTERVAL.saturating_sub(self.last_publish.elapsed())
         } else {
             Duration::from_secs(60)
-        };
-        let request = requests.recv_timeout(timeout);
-        if matches!(request, Err(mpsc::RecvTimeoutError::Disconnected)) {
-            break;
         }
-        let incoming: Vec<_> = request
-            .ok()
-            .into_iter()
-            .chain(requests.try_iter().take(511))
-            .collect();
-        let last_view = incoming.iter().rposition(|r| matches!(r, Request::View(_)));
-        for (index, request) in incoming.into_iter().enumerate() {
-            match request {
-                Request::Quit => return,
-                Request::View(next) if Some(index) == last_view => {
-                    let file = next.file;
-                    if file >= slots.len() || closed[file] {
-                        continue;
-                    }
-                    let owner = owners[file];
-                    if slots[owner].is_none() {
-                        match Dataset::open(&paths[file], &cache) {
-                            Ok(dataset) => {
-                                slots[owner] = Some(Slot {
-                                    dataset,
-                                    failure: None,
-                                    stats: None,
-                                    stats_progress: None,
-                                    last_stats: Instant::now() - STATS_INTERVAL,
-                                })
-                            }
-                            Err(error) => {
-                                view = None;
-                                search = None;
-                                pending_copy = None;
-                                foreground_read = false;
-                                dirty = false;
-                                message(&updates, file, error.to_string());
-                                continue;
-                            }
-                        }
-                    }
-                    // A new position can request its necessary prefix while
-                    // indexing is paused. A refresh/resize after Esc cannot.
-                    let moved = view.as_ref().is_none_or(|old| {
-                        old.file != file || old.record != next.record || old.start != next.start
-                    });
-                    foreground_read |= moved;
-                    if search
-                        .as_ref()
-                        .is_some_and(|job| job.file != file || job.token != next.token)
-                    {
-                        search = None;
-                    }
-                    if pending_copy
-                        .as_ref()
-                        .is_some_and(|job| job.file != file || job.token != next.token)
-                    {
-                        pending_copy = None;
-                    }
-                    view = Some(next);
-                    dirty = true;
-                    last_publish = Instant::now() - PUBLISH_INTERVAL;
+    }
+
+    fn cancel_operations(&mut self) {
+        if let Some(job) = self.search.take() {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
+        if let Some(job) = self.copy.take() {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn accept_operation(&mut self, file: usize, operation_id: u64, cancel: &AtomicBool) -> bool {
+        if self.view.as_ref().is_none_or(|v| v.file != file)
+            || operation_id <= self.last_operation_id
+            || cancel.load(Ordering::Relaxed)
+        {
+            return false;
+        }
+        self.cancel_operations();
+        self.last_operation_id = operation_id;
+        self.tabs[file].paused = false;
+        self.dirty = true;
+        true
+    }
+
+    fn set_view(&mut self, next: ViewRequest) {
+        let file = next.file;
+        if file >= self.slots.len() || self.closed[file] {
+            return;
+        }
+        let owner = self.owners[file];
+        if self.slots[owner].is_none() {
+            match Dataset::open(&self.paths[file], &self.cache) {
+                Ok(dataset) => {
+                    self.slots[owner] = Some(Slot {
+                        dataset,
+                        file_size: std::fs::metadata(&self.paths[file]).ok().map(|m| m.len()),
+                        failure: None,
+                        stats: None,
+                        stats_progress: None,
+                        last_stats: Instant::now() - STATS_INTERVAL,
+                    })
                 }
-                Request::View(_) => {}
-                Request::Search {
-                    token,
-                    file,
-                    query,
-                    after,
-                } => {
-                    if !matches_view(&view, file, token) || query.is_empty() {
-                        continue;
-                    }
-                    search = Some(SearchJob {
-                        token,
-                        file,
-                        query,
-                        after,
-                        tried: None,
-                    });
-                    tabs[file].paused = false;
-                    dirty = true;
-                }
-                Request::Statistics { file } => {
-                    if view.as_ref().is_none_or(|v| v.file != file) {
-                        continue;
-                    }
-                    tabs[file].statistics = true;
-                    tabs[file].paused = false;
-                    dirty = true;
-                }
-                Request::Copy {
-                    token,
-                    file,
-                    record,
-                    range,
-                } => {
-                    if !matches_view(&view, file, token) {
-                        continue;
-                    }
-                    pending_copy = Some(CopyJob {
-                        token,
-                        file,
-                        record,
-                        range,
-                    });
-                    tabs[file].paused = false;
-                    message(
-                        &updates,
-                        file,
-                        "Reading selection for clipboard… Esc cancels".into(),
-                    );
-                    dirty = true;
-                }
-                Request::Cancel(file) => {
-                    if let Some(tab) = tabs.get_mut(file) {
-                        tab.paused = true;
-                        tab.statistics = false;
-                    }
-                    if search.as_ref().is_some_and(|job| job.file == file) {
-                        search = None;
-                    }
-                    if pending_copy.as_ref().is_some_and(|job| job.file == file) {
-                        pending_copy = None;
-                    }
-                    if view.as_ref().is_some_and(|v| v.file == file) {
-                        foreground_read = false;
-                        dirty = true;
-                        last_publish = Instant::now() - PUBLISH_INTERVAL;
-                    }
-                    message(&updates, file, "Background work paused".into());
-                }
-                Request::Close(file) => {
-                    if file >= slots.len() {
-                        continue;
-                    }
-                    closed[file] = true;
-                    let owner = owners[file];
-                    if !owners
-                        .iter()
-                        .enumerate()
-                        .any(|(other, &candidate)| candidate == owner && !closed[other])
-                    {
-                        slots[owner] = None;
-                    }
-                    if view.as_ref().is_some_and(|v| v.file == file) {
-                        view = None;
-                        foreground_read = false;
-                        dirty = false;
-                    }
-                    if search.as_ref().is_some_and(|job| job.file == file) {
-                        search = None;
-                    }
-                    if pending_copy.as_ref().is_some_and(|job| job.file == file) {
-                        pending_copy = None;
-                    }
+                Err(error) => {
+                    self.cancel_operations();
+                    self.view = None;
+                    self.foreground_read = false;
+                    self.dirty = false;
+                    message(&self.updates, file, error.to_string());
+                    return;
                 }
             }
         }
-        working = false;
-        let Some(current) = &view else {
-            continue;
+        let context_changed = self
+            .view
+            .as_ref()
+            .is_some_and(|old| old.file != file || old.record != next.record);
+        if context_changed {
+            self.cancel_operations();
+        }
+        let moved = self.view.as_ref().is_none_or(|old| {
+            old.file != file || old.record != next.record || old.start != next.start
+        });
+        // Refresh/resize after Esc cannot restart scanning; a new position may read its prefix.
+        self.foreground_read |= moved;
+        self.view = Some(next);
+        self.dirty = true;
+        self.last_publish = Instant::now() - PUBLISH_INTERVAL;
+    }
+
+    /// Returns false on Quit; all other requests update scheduling state only.
+    fn request(&mut self, request: Request) -> bool {
+        match request {
+            Request::Quit => {
+                self.cancel_operations();
+                return false;
+            }
+            Request::View(next) => self.set_view(next),
+            Request::Search {
+                operation_id,
+                file,
+                query,
+                after,
+                cancel,
+            } => {
+                if !query.is_empty() && self.accept_operation(file, operation_id, &cancel) {
+                    self.search = Some(SearchJob {
+                        operation_id,
+                        file,
+                        query,
+                        after,
+                        cancel,
+                        tried: None,
+                    });
+                }
+            }
+            Request::Copy {
+                operation_id,
+                file,
+                record,
+                range,
+                cancel,
+            } => {
+                if self
+                    .view
+                    .as_ref()
+                    .is_some_and(|v| v.file == file && v.record == record)
+                    && self.accept_operation(file, operation_id, &cancel)
+                {
+                    self.copy = Some(CopyJob {
+                        operation_id,
+                        file,
+                        record,
+                        range,
+                        cancel,
+                    });
+                }
+            }
+            Request::Statistics { file } => {
+                if self.view.as_ref().is_some_and(|v| v.file == file) {
+                    self.tabs[file].statistics = true;
+                    self.tabs[file].paused = false;
+                    self.dirty = true;
+                }
+            }
+            Request::Cancel(file) => {
+                if let Some(tab) = self.tabs.get_mut(file) {
+                    tab.paused = true;
+                    tab.statistics = false;
+                }
+                if self.view.as_ref().is_some_and(|v| v.file == file) {
+                    self.cancel_operations();
+                    self.foreground_read = false;
+                    self.dirty = true;
+                    self.last_publish = Instant::now() - PUBLISH_INTERVAL;
+                }
+                message(&self.updates, file, "Background work paused".into());
+            }
+            Request::Close(file) => self.close(file),
+        }
+        true
+    }
+
+    fn close(&mut self, file: usize) {
+        if file >= self.slots.len() {
+            return;
+        }
+        self.closed[file] = true;
+        let owner = self.owners[file];
+        if !self
+            .owners
+            .iter()
+            .enumerate()
+            .any(|(other, &candidate)| candidate == owner && !self.closed[other])
+        {
+            self.slots[owner] = None;
+        }
+        if self.view.as_ref().is_some_and(|v| v.file == file) {
+            self.cancel_operations();
+            self.view = None;
+            self.foreground_read = false;
+            self.dirty = false;
+        }
+    }
+
+    fn tick(&mut self) -> bool {
+        self.working = false;
+        let Some(current) = &self.view else {
+            return true;
         };
         let file = current.file;
-        let Some(slot) = &mut slots[owners[file]] else {
-            continue;
+        let Some(slot) = &mut self.slots[self.owners[file]] else {
+            return true;
         };
-        let tab = &mut tabs[file];
+        let tab = &mut self.tabs[file];
         let before = slot.dataset.progress();
         let stopped = before.complete || before.error.is_some() || slot.failure.is_some();
-        let needs_view = foreground_read
+        let needs_view = self.foreground_read
             && slot
                 .dataset
                 .record(current.record)
@@ -381,185 +342,126 @@ fn run(
                     !r.complete && r.length < current.start.saturating_add(current.count as u64)
                 });
         if !needs_view {
-            foreground_read = false;
+            self.foreground_read = false;
         }
         if !stopped && (!tab.paused || needs_view) {
             match slot.dataset.step(64 * 1024) {
-                Ok(after) => dirty |= ProgressKey::from(&before) != ProgressKey::from(&after),
+                Ok(after) => self.dirty |= ProgressKey::from(&before) != ProgressKey::from(&after),
                 Err(error) => {
                     slot.failure = Some(error.to_string());
-                    message(&updates, file, error.to_string());
-                    dirty = true;
+                    message(&self.updates, file, error.to_string());
+                    self.dirty = true;
                 }
             }
         }
         let progress = slot.dataset.progress();
         let key = ProgressKey::from(&progress);
         let stopped = progress.complete || progress.error.is_some() || slot.failure.is_some();
-        working = !stopped && (!tab.paused || needs_view);
-
-        if cancel.load(Ordering::Relaxed) {
-            search = None;
-            pending_copy = None;
-        }
-        if let Some(job) = &mut search
-            && job.file == file
-            && job.tried.as_ref().is_none_or(|last| {
-                last.records != key.records
-                    || last.complete != key.complete
-                    || last.errors != key.errors
-                    || last.error != key.error
-            })
+        self.working = !stopped && (!tab.paused || needs_view);
+        if self
+            .search
+            .as_mut()
+            .is_some_and(|job| job.step(slot, stopped, &self.updates))
         {
-            job.tried = Some(key.clone());
-            match slot
-                .dataset
-                .find_name_cancellable(&job.query, job.after, Arc::clone(&cancel))
-            {
-                Ok(Some(record)) => {
-                    if !cancel.load(Ordering::Relaxed) {
-                        let _ = updates.send(Update::Selected {
-                            token: job.token,
-                            file,
-                            record,
-                        });
-                    }
-                    search = None;
-                }
-                Ok(None) if stopped => {
-                    let wrapped = if job.after > 0 {
-                        slot.dataset
-                            .find_name_cancellable(&job.query, 0, Arc::clone(&cancel))
-                    } else {
-                        Ok(None)
-                    };
-                    match wrapped {
-                        Ok(Some(record)) if !cancel.load(Ordering::Relaxed) => {
-                            let _ = updates.send(Update::Selected {
-                                token: job.token,
-                                file,
-                                record,
-                            });
-                        }
-                        Ok(_) => message(
-                            &updates,
-                            file,
-                            format!("No record matching {:?}", job.query),
-                        ),
-                        Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                        Err(error) => message(&updates, file, error.to_string()),
-                    }
-                    search = None;
-                }
-                Err(error) => {
-                    if error.kind() != io::ErrorKind::Interrupted {
-                        message(&updates, file, error.to_string());
-                    }
-                    search = None;
-                }
-                _ => {}
-            }
+            self.search = None;
         }
-        if let Some(job) = &pending_copy
-            && job.file == file
+        if self
+            .copy
+            .as_ref()
+            .is_some_and(|job| job.step(slot, stopped, &self.updates))
         {
-            let mut finished = false;
-            if !slot.dataset.format().can_copy() {
-                message(&updates, file, "Copy is disabled for SAM/BAM".into());
-                finished = true;
-            } else {
-                match slot.dataset.record(job.record) {
-                    Ok(Some(meta)) => {
-                        let ready = match job.range {
-                            Some((start, end)) => {
-                                start <= end && (meta.length >= end || meta.complete)
-                            }
-                            None => meta.complete,
-                        };
-                        if ready {
-                            let result = match job.range {
-                                Some((start, end)) => {
-                                    copy_range(&mut slot.dataset, job.record, start, end, &cancel)
-                                }
-                                None => slot.dataset.copy_record(job.record, &cancel),
-                            };
-                            match result {
-                                Ok(text) if !cancel.load(Ordering::Relaxed) => {
-                                    let _ = updates.send(Update::Copied {
-                                        token: job.token,
-                                        file,
-                                        text,
-                                    });
-                                }
-                                Ok(_) => {}
-                                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                                Err(error) => message(&updates, file, error.to_string()),
-                            }
-                            finished = true;
-                        } else if stopped || job.range.is_some_and(|(start, end)| start > end) {
-                            message(
-                                &updates,
-                                file,
-                                "Cannot copy an incomplete record or invalid range".into(),
-                            );
-                            finished = true;
-                        }
-                    }
-                    Ok(None) if stopped => {
-                        message(&updates, file, "Record is not available".into());
-                        finished = true;
-                    }
-                    Err(error) => {
-                        message(&updates, file, error.to_string());
-                        finished = true;
-                    }
-                    _ => {}
-                }
-            }
-            if finished {
-                pending_copy = None;
-            }
+            self.copy = None;
         }
-        // Statistics are opt-in, at most once per second during scanning, and
-        // once for the final state. A completed tab reuses its cached result.
-        if tab.statistics
-            && !cancel.load(Ordering::Relaxed)
-            && slot.stats_progress.as_ref() != Some(&key)
-            && (slot.stats.is_none() || stopped || slot.last_stats.elapsed() >= STATS_INTERVAL)
-        {
-            match slot.dataset.stats_cancellable(Arc::clone(&cancel)) {
-                Ok(stats) => {
-                    slot.stats = Some(stats);
-                    slot.stats_progress = Some(key);
-                    dirty = true;
-                }
-                Err(error) => {
-                    if error.kind() != io::ErrorKind::Interrupted {
-                        message(&updates, file, error.to_string());
-                    }
-                    tab.statistics = false;
-                }
-            }
-            slot.last_stats = Instant::now();
-        }
-        if dirty && last_publish.elapsed() >= PUBLISH_INTERVAL {
+        self.dirty |=
+            update_statistics(slot, tab, &key, stopped, &self.cancel, &self.updates, file);
+        if self.dirty && self.last_publish.elapsed() >= PUBLISH_INTERVAL {
             match snapshot(slot, current.clone(), tab.paused) {
                 Ok(snapshot) => {
-                    if updates.send(Update::View(Box::new(snapshot))).is_err() {
-                        break;
+                    if self.updates.send(Update::View(Box::new(snapshot))).is_err() {
+                        return false;
                     }
                 }
-                Err(error) => message(&updates, file, error.to_string()),
+                Err(error) => message(&self.updates, file, error.to_string()),
             }
-            dirty = false;
-            last_publish = Instant::now();
+            self.dirty = false;
+            self.last_publish = Instant::now();
+        }
+        true
+    }
+}
+
+fn run(
+    paths: Vec<PathBuf>,
+    cache: PathBuf,
+    requests: mpsc::Receiver<Request>,
+    updates: mpsc::Sender<Update>,
+    cancel: Arc<AtomicBool>,
+) {
+    let mut scheduler = Scheduler::new(paths, cache, updates, cancel);
+    loop {
+        let request = requests.recv_timeout(scheduler.timeout());
+        if matches!(request, Err(mpsc::RecvTimeoutError::Disconnected)) {
+            return;
+        }
+        let incoming = request
+            .ok()
+            .into_iter()
+            .chain(requests.try_iter().take(511));
+        // Coalesce adjacent views only. An action between views needs the preceding context.
+        let mut pending_view = None;
+        for request in incoming {
+            if let Request::View(view) = request {
+                pending_view = Some(view);
+                continue;
+            }
+            if let Some(view) = pending_view.take() {
+                scheduler.set_view(view);
+            }
+            if !scheduler.request(request) {
+                return;
+            }
+        }
+        if let Some(view) = pending_view {
+            scheduler.set_view(view);
+        }
+        if !scheduler.tick() {
+            return;
         }
     }
 }
 
-fn matches_view(view: &Option<ViewRequest>, file: usize, token: u64) -> bool {
-    view.as_ref()
-        .is_some_and(|v| v.file == file && v.token == token)
+fn update_statistics(
+    slot: &mut Slot,
+    tab: &mut TabState,
+    key: &ProgressKey,
+    stopped: bool,
+    cancel: &Arc<AtomicBool>,
+    updates: &mpsc::Sender<Update>,
+    file: usize,
+) -> bool {
+    if !tab.statistics
+        || cancel.load(Ordering::Relaxed)
+        || slot.stats_progress.as_ref() == Some(key)
+        || (slot.stats.is_some() && !stopped && slot.last_stats.elapsed() < STATS_INTERVAL)
+    {
+        return false;
+    }
+    let changed = match slot.dataset.stats_cancellable(Arc::clone(cancel)) {
+        Ok(stats) => {
+            slot.stats = Some(stats);
+            slot.stats_progress = Some(key.clone());
+            true
+        }
+        Err(error) => {
+            if error.kind() != io::ErrorKind::Interrupted {
+                message(updates, file, error.to_string());
+            }
+            tab.statistics = false;
+            false
+        }
+    };
+    slot.last_stats = Instant::now();
+    changed
 }
 
 fn message(updates: &mpsc::Sender<Update>, file: usize, text: String) {
@@ -588,6 +490,7 @@ fn snapshot(slot: &mut Slot, request: ViewRequest, paused: bool) -> io::Result<S
             .records(request.list_start, request.list_count.min(256))?,
         format: slot.dataset.format(),
         compression: slot.dataset.compression().to_owned(),
+        file_size: slot.file_size,
         record,
         window,
         progress,
@@ -595,352 +498,4 @@ fn snapshot(slot: &mut Slot, request: ViewRequest, paused: bool) -> io::Result<S
         request,
         paused,
     })
-}
-
-fn copy_range(
-    dataset: &mut Dataset,
-    record: u64,
-    start: u64,
-    end: u64,
-    cancel: &AtomicBool,
-) -> io::Result<String> {
-    let mut result = Vec::new();
-    let mut offset = start;
-    while offset < end {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "Copy cancelled"));
-        }
-        let window = dataset.read_range(record, offset, (end - offset).min(64 * 1024) as usize)?;
-        if window.sequence.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "Selection is not fully available",
-            ));
-        }
-        offset += window.sequence.len() as u64;
-        result.extend(window.sequence);
-    }
-    String::from_utf8(result).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-}
-
-pub fn cache_directory() -> PathBuf {
-    if let Some(path) = std::env::var_os("XDG_CACHE_HOME") {
-        PathBuf::from(path).join("seqviz-rs")
-    } else if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".cache/seqviz-rs")
-    } else {
-        std::env::temp_dir().join("seqviz-rs")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    struct Fixture {
-        _directory: TempDir,
-        paths: Vec<PathBuf>,
-        cache: PathBuf,
-    }
-
-    impl Fixture {
-        fn new(contents: &[&[u8]]) -> Self {
-            let directory = TempDir::new().unwrap();
-            let paths = contents
-                .iter()
-                .enumerate()
-                .map(|(index, bytes)| {
-                    let path = directory.path().join(format!("input-{index}.fa"));
-                    std::fs::write(&path, bytes).unwrap();
-                    path
-                })
-                .collect();
-            let cache = directory.path().join("cache");
-            Self {
-                _directory: directory,
-                paths,
-                cache,
-            }
-        }
-
-        fn start(&self, initial: Vec<Request>) -> Worker {
-            let (send, receive) = mpsc::channel();
-            let (updates, events) = mpsc::channel();
-            for request in initial {
-                send.send(request).unwrap();
-            }
-            let cancel = Arc::new(AtomicBool::new(false));
-            let thread_cancel = Arc::clone(&cancel);
-            let paths = self.paths.clone();
-            let cache = self.cache.clone();
-            let thread = thread::spawn(move || run(paths, cache, receive, updates, thread_cancel));
-            Worker {
-                requests: send,
-                updates: events,
-                cancel_copy: cancel,
-                thread: Some(thread),
-            }
-        }
-    }
-
-    fn view(token: u64, file: usize, start: u64) -> Request {
-        Request::View(ViewRequest {
-            token,
-            file,
-            record: 0,
-            start,
-            count: 80,
-            list_start: 0,
-            list_count: 10,
-        })
-    }
-
-    fn wait_view(worker: &Worker, accept: impl Fn(&Snapshot) -> bool) -> Snapshot {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let update = worker
-                .updates
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .expect("Worker did not publish the requested view");
-            if let Update::View(snapshot) = update
-                && accept(&snapshot)
-            {
-                return *snapshot;
-            }
-        }
-    }
-
-    fn assert_quiet(worker: &Worker) {
-        assert!(
-            matches!(
-                worker.updates.recv_timeout(Duration::from_millis(250)),
-                Err(mpsc::RecvTimeoutError::Timeout)
-            ),
-            "Idle worker kept publishing updates"
-        );
-    }
-
-    #[test]
-    fn coalesces_views_before_opening_obsolete_files() {
-        let mut fixture = Fixture::new(&[b">first\nAAA\n", b">second\nTTT\n"]);
-        fixture.paths[0] = fixture._directory.path().join("does-not-exist.fa");
-        let worker = fixture.start(vec![view(1, 0, 0), view(2, 1, 0)]);
-        loop {
-            match worker.updates.recv_timeout(Duration::from_secs(5)).unwrap() {
-                Update::Message { file: 0, text } => panic!("Obsolete file was opened: {text}"),
-                Update::View(snapshot) if snapshot.progress.complete => {
-                    assert_eq!(snapshot.request.file, 1);
-                    assert_eq!(snapshot.request.token, 2);
-                    assert_eq!(snapshot.window.sequence, b"TTT");
-                    break;
-                }
-                _ => {}
-            }
-        }
-        assert_quiet(&worker);
-    }
-
-    #[test]
-    fn cancel_pauses_an_unready_view_and_refresh_does_not_restart_it() {
-        let mut data = b">long\n".to_vec();
-        data.extend(std::iter::repeat_n(b'A', 300_000));
-        let fixture = Fixture::new(&[&data]);
-        let worker = fixture.start(vec![view(1, 0, 100_000), Request::Cancel(0)]);
-        let paused = wait_view(&worker, |snapshot| snapshot.paused);
-        assert_eq!(paused.progress.scanned_bytes, 0);
-        worker.send(view(2, 0, 100_000));
-        let refreshed = wait_view(&worker, |snapshot| snapshot.request.token == 2);
-        assert!(refreshed.paused);
-        assert_eq!(refreshed.progress.scanned_bytes, 0);
-        assert_quiet(&worker);
-        worker.send(Request::Statistics { file: 0 });
-        let complete = wait_view(&worker, |snapshot| {
-            snapshot.progress.complete && snapshot.stats.is_some()
-        });
-        assert!(!complete.paused);
-        assert_eq!(complete.stats.unwrap().total_length, 300_000);
-        assert_quiet(&worker);
-    }
-
-    #[test]
-    fn completed_statistics_are_cached_and_not_published_repeatedly() {
-        let fixture = Fixture::new(&[b">a\nACGT\n>b\nAA\n"]);
-        let worker = fixture.start(vec![view(1, 0, 0)]);
-        let initial = wait_view(&worker, |snapshot| snapshot.progress.complete);
-        assert!(
-            initial.stats.is_none(),
-            "Browsing alone must not calculate statistics"
-        );
-        worker.send(Request::Statistics { file: 0 });
-        let complete = wait_view(&worker, |snapshot| {
-            snapshot.stats.as_ref().is_some_and(|stats| stats.complete)
-        });
-        assert_eq!(complete.stats.unwrap().total_length, 6);
-        assert_quiet(&worker);
-    }
-
-    #[test]
-    fn closed_tabs_cannot_be_reopened_by_a_stale_view() {
-        let fixture = Fixture::new(&[b">closed\nAAA\n", b">open\nCCC\n"]);
-        let worker = fixture.start(vec![Request::Close(0), view(2, 1, 0)]);
-        wait_view(&worker, |snapshot| snapshot.progress.complete);
-        worker.send(view(3, 0, 0));
-        assert_quiet(&worker);
-    }
-
-    #[test]
-    fn copy_results_carry_the_view_token_and_stale_requests_are_ignored() {
-        let fixture = Fixture::new(&[b">a\nACGT\n"]);
-        let worker = fixture.start(vec![view(2, 0, 0)]);
-        wait_view(&worker, |snapshot| snapshot.progress.complete);
-        worker.send(Request::Copy {
-            token: 1,
-            file: 0,
-            record: 0,
-            range: None,
-        });
-        assert_quiet(&worker);
-        worker.send(Request::Copy {
-            token: 2,
-            file: 0,
-            record: 0,
-            range: Some((1, 3)),
-        });
-        loop {
-            match worker.updates.recv_timeout(Duration::from_secs(5)).unwrap() {
-                Update::Copied { token, file, text } => {
-                    assert_eq!((token, file, text.as_str()), (2, 0, "CG"));
-                    break;
-                }
-                Update::Message { text, .. }
-                    if text != "Reading selection for clipboard… Esc cancels" =>
-                {
-                    panic!("Copy failed: {text}");
-                }
-                _ => {}
-            }
-        }
-    }
-
-    #[test]
-    fn fatal_scan_errors_stop_work_and_do_not_flood_the_update_queue() {
-        let fixture = Fixture::new(&[b">valid\nACGT\n>\n"]);
-        let worker = fixture.start(vec![view(1, 0, 0)]);
-        let failed = wait_view(&worker, |snapshot| snapshot.progress.error.is_some());
-        assert!(failed.progress.error.is_some());
-        assert_quiet(&worker);
-    }
-
-    #[test]
-    fn search_uses_tokens_and_wraps_only_after_the_indexed_end() {
-        let fixture = Fixture::new(&[b">match-first\nA\n>other\nC\n>match-last\nT\n"]);
-        let worker = fixture.start(vec![view(4, 0, 0)]);
-        wait_view(&worker, |snapshot| snapshot.progress.complete);
-        worker.send(Request::Search {
-            token: 3,
-            file: 0,
-            query: "match".into(),
-            after: 0,
-        });
-        assert_quiet(&worker);
-        for (after, expected) in [(0, 0), (1, 2), (3, 0)] {
-            worker.send(Request::Search {
-                token: 4,
-                file: 0,
-                query: "match".into(),
-                after,
-            });
-            loop {
-                match worker.updates.recv_timeout(Duration::from_secs(5)).unwrap() {
-                    Update::Selected {
-                        token,
-                        file,
-                        record,
-                    } => {
-                        assert_eq!((token, file, record), (4, 0, expected));
-                        break;
-                    }
-                    Update::Message { text, .. } => panic!("Search failed: {text}"),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn cancelled_actions_do_not_clear_the_shared_cancellation_flag() {
-        let fixture = Fixture::new(&[b">match\nACGT\n"]);
-        let worker = fixture.start(vec![view(5, 0, 0)]);
-        wait_view(&worker, |snapshot| snapshot.progress.complete);
-        worker.cancel_copy.store(true, Ordering::Relaxed);
-        worker.send(Request::Search {
-            token: 5,
-            file: 0,
-            query: "match".into(),
-            after: 0,
-        });
-        worker.send(Request::Copy {
-            token: 5,
-            file: 0,
-            record: 0,
-            range: None,
-        });
-        let deadline = Instant::now() + Duration::from_millis(250);
-        while let Ok(update) = worker
-            .updates
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        {
-            assert!(
-                !matches!(update, Update::Copied { .. } | Update::Selected { .. }),
-                "A cancelled operation published a successful result"
-            );
-        }
-        assert!(worker.cancel_copy.load(Ordering::Relaxed));
-    }
-
-    #[test]
-    fn duplicate_paths_share_one_incremental_dataset_across_tab_switches() {
-        let mut data = b">long\n".to_vec();
-        data.extend(std::iter::repeat_n(b'A', 300_000));
-        data.extend_from_slice(b"\n>last\nCCCCCCCC\n");
-        let mut fixture = Fixture::new(&[&data]);
-        fixture.paths.push(fixture.paths[0].clone());
-        let worker = fixture.start(vec![view(1, 0, 0), Request::Cancel(0)]);
-        wait_view(&worker, |snapshot| snapshot.paused);
-        worker.send(view(2, 0, 150_000));
-        let first = wait_view(&worker, |snapshot| {
-            snapshot.request.token == 2
-                && snapshot
-                    .record
-                    .as_ref()
-                    .is_some_and(|record| record.length >= 150_080)
-        });
-        assert!(!first.progress.complete);
-        worker.send(view(3, 1, 0));
-        worker.send(Request::Cancel(1));
-        wait_view(&worker, |snapshot| {
-            snapshot.request.token == 3 && snapshot.paused
-        });
-        worker.send(view(4, 0, 100_000));
-        worker.send(Request::Statistics { file: 0 });
-        let complete = wait_view(&worker, |snapshot| {
-            snapshot.request.token == 4
-                && (snapshot.progress.complete || snapshot.progress.error.is_some())
-        });
-        assert!(
-            complete.progress.error.is_none(),
-            "{:?}",
-            complete.progress.error
-        );
-        assert_eq!(complete.progress.records, 2);
-        assert_eq!(complete.records.len(), 2);
-        assert_eq!(complete.window.sequence, vec![b'A'; 80]);
-        assert_eq!(complete.stats.unwrap().total_length, 300_008);
-        worker.send(Request::Close(0));
-        worker.send(view(5, 1, 299_990));
-        let remaining = wait_view(&worker, |snapshot| snapshot.request.token == 5);
-        assert_eq!(remaining.window.sequence, vec![b'A'; 10]);
-        assert_eq!(remaining.progress.records, 2);
-    }
 }

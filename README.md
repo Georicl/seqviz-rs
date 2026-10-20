@@ -6,6 +6,8 @@
 
 This branch contains the first browser implementation. The interface is in English and targets macOS and Linux, including SSH sessions. Run it straight from the command line or through a blocking Yazi opener.
 
+For module responsibilities and data flow, see the [architecture guide](docs/architecture.md).
+
 ## Quick start
 
 Run the bundled FASTA example from this checkout:
@@ -40,7 +42,7 @@ sq proteins.faa alignments.bam
 sq -- "-sample.fa"
 ```
 
-The browser opens only when both stdin and stdout are terminals. If you redirect stdout, `sq` falls back to printing plain, uncompressed FASTA; in that mode it neither starts the interactive browser nor decodes the other formats.
+The browser opens when both stdin and stdout are terminals. Redirected output prints FASTA, including gzip/BGZF inputs, through the same reader and validation rules as the browser. Other formats require an interactive terminal; SAM/BAM cannot be printed or copied.
 
 ## Supported files
 
@@ -52,7 +54,7 @@ The browser opens only when both stdin and stdout are terminals. If you redirect
 | SAM / BAM | One entry per alignment, with SEQ, QUAL, reference, position, FLAG, MAPQ, CIGAR and optional fields |
 | gzip / BGZF | Compressed text and BAM reading with persistent seek checkpoints |
 
-FASTA extensions include `.fa`, `.fasta`, `.fna`, `.fas`, `.fsa`, `.faa`, and `.pep`; FASTQ uses `.fq` or `.fastq`. The extension selects the expected format, and the file contents are then verified while the file is opened and parsed.
+FASTA extensions include `.fa`, `.fasta`, `.fna`, `.fas`, `.fsa`, `.faa`, and `.pep`; FASTQ uses `.fq` or `.fastq`. Contents identify the record format. Extensions provide hints for empty files, while `.faa` and `.pep` explicitly select protein interpretation. Records are validated during parsing.
 
 FASTQ quality is Phred+33. Headers from Illumina, Nanopore, PacBio, and SRA are recognised, and the fields they carry are exposed; unrecognised headers remain available as plain text. For the current record, the browser shows mean, minimum, and maximum quality together with the Q30 percentage.
 

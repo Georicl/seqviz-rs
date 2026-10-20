@@ -44,6 +44,7 @@ fn long_fasta_is_browsable_before_record_completion_and_spans_are_compact() {
     );
     assert_eq!(data.read_range(1, 0, 100).unwrap().sequence, b"GGCC");
     let spans: u64 = data
+        .index
         .db
         .query_row("SELECT COUNT(*) FROM spans", [], |r| r.get(0))
         .unwrap();
@@ -109,17 +110,17 @@ fn persistent_complete_and_partial_indexes_are_reused_and_changed_source_invalid
     assert_eq!(data.records(0, 10).unwrap().len(), 2);
     drop(data);
     let mut data = Dataset::open(&path, &cache).unwrap();
-    assert_eq!(data.progress.records, 1);
+    assert_eq!(data.progress().records, 1);
     finish(&mut data, 5);
-    assert_eq!(data.progress.records, 3);
+    assert_eq!(data.progress().records, 3);
     drop(data);
     let mut data = Dataset::open(&path, &cache).unwrap();
-    assert!(data.progress.complete);
+    assert!(data.progress().complete);
     assert_eq!(data.read_range(2, 0, 4).unwrap().sequence, b"NNNN");
     drop(data);
     fs::write(&path, b">new\nA\n").unwrap();
     let mut data = Dataset::open(&path, &cache).unwrap();
-    assert!(!data.progress.complete);
+    assert!(!data.progress().complete);
     finish(&mut data, CHUNK);
     assert_eq!(data.record(0).unwrap().unwrap().name, "new");
 }
@@ -137,9 +138,16 @@ fn malformed_fastq_stops_without_guessing_at_next_at_sign() {
             break;
         }
     }
-    assert!(data.progress.error.as_deref().unwrap().contains("quality"));
-    assert!(!data.progress.complete);
-    assert_eq!(data.progress.errors, 1);
+    assert!(
+        data.index
+            .progress
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("quality")
+    );
+    assert!(!data.progress().complete);
+    assert_eq!(data.progress().errors, 1);
     assert_eq!(data.read_range(0, 0, 100).unwrap().sequence, b"AC");
     assert!(!data.stats().unwrap().complete);
     assert_eq!(data.step(1024).unwrap().errors, 1);
@@ -219,7 +227,7 @@ fn empty_and_comment_only_fasta_have_zero_records() {
         let (dir, path) = fixture(content, "fa");
         let mut data = Dataset::open(&path, &dir.path().join("cache")).unwrap();
         finish(&mut data, 1);
-        assert_eq!(data.progress.records, 0);
+        assert_eq!(data.progress().records, 0);
         assert_eq!(data.stats().unwrap().total_length, 0);
     }
 }
@@ -265,8 +273,8 @@ fn concurrent_datasets_use_isolated_writer_caches() {
     assert!(!private.exists());
     drop(first);
     let reopened = Dataset::open(&path, &cache).unwrap();
-    assert!(reopened.progress.complete);
-    assert_eq!(reopened.progress.records, 2);
+    assert!(reopened.progress().complete);
+    assert_eq!(reopened.progress().records, 2);
 }
 
 #[test]
