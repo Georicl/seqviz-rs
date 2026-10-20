@@ -1,6 +1,11 @@
 # Rust build output
 /target/
 
+# Private development notes stay on this computer.
+/docs/product-manual.md
+/docs/architecture.md
+/docs/performance.md
+
 # Local editor and assistant settings
 /.vscode/
 /.idea/
