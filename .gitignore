@@ -6,6 +6,9 @@
 /docs/architecture.md
 /docs/performance.md
 
+# Local social-media exports and production files are never published.
+/promo-local/
+
 # Local editor and assistant settings
 /.vscode/
 /.idea/

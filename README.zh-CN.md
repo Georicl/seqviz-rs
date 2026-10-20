@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" width="200" alt="seqviz-rs logo">
+</p>
+
 # seqviz-rs
 
 [English](README.md) | [简体中文](README.zh-CN.md)
@@ -14,7 +18,7 @@ sq proteins.faa alignments.bam
 
 在 yazi 中也可以按 Enter 打开，浏览完按 `q` 回到文件列表。
 
-![FASTQ 浏览界面：记录列表、质量着色和文件标签](docs/assets/fastq-browser.png)
+[![终端演示：FASTA 选区与复制、gzip FASTQ 质量显示、蛋白质序列、BAM 属性和统计页](docs/assets/demo.gif)](docs/assets/demo.gif)
 
 ## 能看到什么
 

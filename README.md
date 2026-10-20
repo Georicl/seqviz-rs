@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" width="200" alt="seqviz-rs logo">
+</p>
+
 # seqviz-rs
 
 [English](README.md) | [简体中文](README.zh-CN.md)
@@ -14,7 +18,7 @@ sq proteins.faa alignments.bam
 
 You can also open files from yazi with Enter, then press `q` to return to the file list.
 
-![FASTQ browser showing the record list, quality colours and file tabs](docs/assets/fastq-browser.png)
+[![Terminal demo: FASTA selection and copying, gzip FASTQ quality, protein sequences, BAM attributes and statistics](docs/assets/demo.gif)](docs/assets/demo.gif)
 
 ## What you can see
 
