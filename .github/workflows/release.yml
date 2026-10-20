@@ -1,0 +1,149 @@
+name: Build release assets
+run-name: Build ${{ inputs.tag || github.ref_name }} release assets
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, such as v0.1.0
+        required: true
+        type: string
+
+# This workflow builds downloadable artifacts. Release publication is manual.
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  LIBZ_SYS_STATIC: "1"
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+    env:
+      RELEASE_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Manual runs must build the requested tag, not the selected UI branch.
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify tag and package version
+        run: |
+          python3 - <<'PY'
+          import os, subprocess, tomllib
+          from pathlib import Path
+          tag = os.environ["RELEASE_TAG"]
+          version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+          if tag != f"v{version}":
+              raise SystemExit(f"Tag {tag!r} must equal v{version}")
+          tagged = subprocess.check_output(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"], text=True).strip()
+          checked_out = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if checked_out != tagged:
+              raise SystemExit("Checkout does not match the release tag")
+          print(f"Building {tag} from {checked_out}")
+          PY
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy, rustfmt
+      - name: Install musl compiler
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+          echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+      - name: Check and test
+        run: |
+          cargo fmt --check
+          cargo test --locked --target "$RELEASE_TARGET"
+          cargo clippy --locked --target "$RELEASE_TARGET" --all-targets -- -D warnings
+      - name: Build release binary
+        run: |
+          cargo build --release --locked --target "$RELEASE_TARGET"
+          "target/$RELEASE_TARGET/release/sq" --version
+      - name: Verify Linux static linking
+        if: runner.os == 'Linux'
+        run: |
+          binary="target/$RELEASE_TARGET/release/sq"
+          file "$binary"
+          if readelf --program-headers "$binary" | grep -q INTERP; then
+            echo "The Linux binary must not require a dynamic interpreter" >&2
+            exit 1
+          fi
+          if readelf --dynamic "$binary" | grep -q NEEDED; then
+            echo "The Linux binary must not require shared libraries" >&2
+            exit 1
+          fi
+      - name: Verify macOS linking
+        if: runner.os == 'macOS'
+        run: |
+          binary="target/$RELEASE_TARGET/release/sq"
+          file "$binary"
+          otool -L "$binary"
+          if otool -L "$binary" | grep -Eq '/opt/homebrew/|/usr/local/'; then
+            echo "The macOS binary must not require Homebrew libraries" >&2
+            exit 1
+          fi
+      - name: Exercise the release binary in a PTY
+        env:
+          SQ_BIN: ${{ github.workspace }}/target/${{ matrix.target }}/release/sq
+        run: |
+          python3 -m pip install pyte==0.8.2
+          python3 scripts/terminal_smoke.py
+      - name: Package
+        run: bash scripts/package-release.sh "$RELEASE_TARGET" "target/$RELEASE_TARGET/release/sq" dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: seqviz-rs-${{ matrix.target }}
+          path: dist/seqviz-rs-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  collect:
+    name: Collect archives and checksums
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: seqviz-rs-*
+          merge-multiple: true
+          path: dist
+      - name: Generate and verify checksums
+        working-directory: dist
+        run: |
+          sha256sum \
+            seqviz-rs-aarch64-apple-darwin.tar.gz \
+            seqviz-rs-x86_64-apple-darwin.tar.gz \
+            seqviz-rs-x86_64-unknown-linux-musl.tar.gz > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0

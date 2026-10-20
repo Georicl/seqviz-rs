@@ -35,7 +35,28 @@ sq proteins.faa alignments.bam
 
 ## 安装与试用
 
-需要 Rust、Cargo 和 C 编译器。在源码目录安装 `sq`。
+从 [最新 Release](https://github.com/Georicl/seqviz-rs/releases/latest) 下载编译好的 `sq`，无需安装 Rust。
+
+| 平台 | 下载 |
+| --- | --- |
+| macOS 11+ · Apple Silicon（M1 及更新芯片） | [aarch64-apple-darwin](https://github.com/Georicl/seqviz-rs/releases/latest/download/seqviz-rs-aarch64-apple-darwin.tar.gz) |
+| macOS 11+ · Intel | [x86_64-apple-darwin](https://github.com/Georicl/seqviz-rs/releases/latest/download/seqviz-rs-x86_64-apple-darwin.tar.gz) |
+| Linux · x86_64 | [x86_64-unknown-linux-musl](https://github.com/Georicl/seqviz-rs/releases/latest/download/seqviz-rs-x86_64-unknown-linux-musl.tar.gz) |
+
+解压下载的文件，在解压目录中执行：
+
+```sh
+mkdir -p "$HOME/.local/bin"
+install -m 755 sq "$HOME/.local/bin/sq"
+export PATH="$HOME/.local/bin:$PATH"
+sq --version
+```
+
+将 `~/.local/bin` 加入 shell 的 PATH 后，新终端也能直接使用 `sq`。压缩包中同时附有主题和 yazi opener 配置示例。每次发布也提供 [SHA-256 校验文件](https://github.com/Georicl/seqviz-rs/releases/latest/download/SHA256SUMS)。
+
+### 从源码安装
+
+安装 Rust、Cargo 和 C 编译器后，在源码目录执行：
 
 ```sh
 git clone https://github.com/Georicl/seqviz-rs.git

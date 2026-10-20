@@ -35,7 +35,28 @@ Sequences wrap to the window width, with positions starting at 1. Each file keep
 
 ## Install and try it
 
-You need Rust, Cargo and a C compiler. Install `sq` from the source checkout:
+Download a ready-to-run `sq` from the [latest release](https://github.com/Georicl/seqviz-rs/releases/latest). Rust is not required.
+
+| Platform | Download |
+| --- | --- |
+| macOS 11+ · Apple Silicon (M1 or later) | [aarch64-apple-darwin](https://github.com/Georicl/seqviz-rs/releases/latest/download/seqviz-rs-aarch64-apple-darwin.tar.gz) |
+| macOS 11+ · Intel | [x86_64-apple-darwin](https://github.com/Georicl/seqviz-rs/releases/latest/download/seqviz-rs-x86_64-apple-darwin.tar.gz) |
+| Linux · x86_64 | [x86_64-unknown-linux-musl](https://github.com/Georicl/seqviz-rs/releases/latest/download/seqviz-rs-x86_64-unknown-linux-musl.tar.gz) |
+
+Extract the archive, then run these commands in the extracted directory:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+install -m 755 sq "$HOME/.local/bin/sq"
+export PATH="$HOME/.local/bin:$PATH"
+sq --version
+```
+
+Add `~/.local/bin` to your shell's PATH to keep the command available in new terminals. The archives also include the sample theme and yazi opener configurations. [SHA-256 checksums](https://github.com/Georicl/seqviz-rs/releases/latest/download/SHA256SUMS) are available with each release.
+
+### Build from source
+
+With Rust, Cargo and a C compiler installed:
 
 ```sh
 git clone https://github.com/Georicl/seqviz-rs.git
