@@ -8,3 +8,4 @@ name = "sq"
 path = "src/main.rs"
 
 [dependencies]
+crossterm = "0.29.0"
