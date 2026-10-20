@@ -1,6 +1,9 @@
 use super::*;
 use tempfile::TempDir;
 
+// Large fixtures need time to finish in debug builds on shared CI hosts.
+const LARGE_FIXTURE_TIMEOUT: Duration = Duration::from_secs(60);
+
 struct Fixture {
     _directory: TempDir,
     paths: Vec<PathBuf>,
@@ -318,7 +321,7 @@ fn a_32_mib_copy_survives_view_resizes_without_losing_operation_identity() {
         view(2, 0, 0),
         view(3, 0, 0),
     ]);
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + LARGE_FIXTURE_TIMEOUT;
     loop {
         match worker
             .updates
@@ -362,7 +365,7 @@ fn search_survives_layout_generations_until_its_target_is_indexed() {
         view(2, 0, 0),
         view(3, 0, 0),
     ]);
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + LARGE_FIXTURE_TIMEOUT;
     loop {
         match worker
             .updates
