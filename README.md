@@ -1,8 +1,10 @@
 # seqviz-rs
 
-**在终端里看清序列和测序质量。**
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-`sq` 是一个生物序列浏览器。给它一个文件路径，就能在左右双栏中查看记录和序列；多个文件会打开成标签页。支持核酸与蛋白质 FASTA、FASTQ，以及 SAM/BAM，在 macOS 和 Linux 上使用，界面为英文。
+**See sequences and read quality in your terminal.**
+
+`sq` is a biological sequence browser. Give it a file path to browse records and sequences side by side, or open several files in separate tabs. It supports nucleotide and protein FASTA, FASTQ, and SAM/BAM on macOS and Linux. The interface is in English.
 
 ```sh
 sq genome.fa
@@ -10,26 +12,26 @@ sq reads.fastq.gz
 sq proteins.faa alignments.bam
 ```
 
-在 yazi 中也可以按 Enter 打开，浏览完按 `q` 回到文件列表。
+You can also open files from yazi with Enter, then press `q` to return to the file list.
 
-![FASTQ 浏览界面：记录列表、质量着色和文件标签](docs/assets/fastq-browser.png)
+![FASTQ browser showing the record list, quality colours and file tabs](docs/assets/fastq-browser.png)
 
-## 能看到什么
+## What you can see
 
-| 文件 | 显示内容 |
+| File | Display |
 | --- | --- |
-| 核酸 FASTA | 碱基着色，完整 header、长度和 GC |
-| 蛋白质 FASTA | 氨基酸分组着色，完整 header 和序列长度 |
-| FASTQ | 按质量着色的碱基，逐字符质量副行、质量概览条和 Q30 等属性 |
-| SAM / BAM | 每条比对记录的序列与质量，以及参考序列、位置、FLAG、MAPQ、CIGAR 和附加字段 |
+| Nucleotide FASTA | Coloured bases, full header, length and GC |
+| Protein FASTA | Residue-category colours, full header and sequence length |
+| FASTQ | Bases coloured by quality, an aligned quality character row, a quality overview and metrics such as Q30 |
+| SAM / BAM | Sequence and quality for each alignment, plus reference, position, FLAG, MAPQ, CIGAR and optional fields |
 
-支持 gzip 和 BGZF 压缩输入。FASTQ 接受跨行序列与质量，使用 Phred+33，并解析 Illumina、Nanopore、PacBio 和 SRA 的 header；原始 header 始终保留。
+gzip and BGZF input are supported. FASTQ accepts wrapped sequence and quality fields, uses Phred+33, and parses headers from Illumina, Nanopore, PacBio and SRA. The original header is always retained.
 
-序列随窗口宽度自动换行，位置从 1 开始。切换标签时，各文件保留自己的当前记录和滚动位置。FASTA/FASTQ 可以用鼠标跨行选择序列，拖到边缘继续滚动；缩放窗口后选区仍对应原来的序列区间。
+Sequences wrap to the window width, with positions starting at 1. Each file keeps its current record and scroll position while you switch tabs. In FASTA/FASTQ, drag across lines to select sequence and hold the pointer at an edge to keep scrolling. Resizing preserves the selected sequence coordinates.
 
-## 安装与试用
+## Install and try it
 
-需要 Rust、Cargo 和 C 编译器。在源码目录安装 `sq`。
+You need Rust, Cargo and a C compiler. Install `sq` from the source checkout:
 
 ```sh
 git clone https://github.com/Georicl/seqviz-rs.git
@@ -39,84 +41,78 @@ sq --version
 sq test/test.fa
 ```
 
-也可以先运行仓库里的示例，不安装命令。
+To try the bundled examples without installing the command:
 
 ```sh
 cargo run --release --locked -- test/test.fa test/alignments.bam
 ```
 
-传入多个路径，就能在同一个浏览器中切换文件。文件名以 `-` 开头时，在路径前加 `--`。
+Pass multiple paths to browse files in the same window. Use `--` before a path whose name begins with `-`.
 
 ```sh
 sq assembly.fa reads.fastq.gz proteins.faa
 sq -- "-sample.fa"
 ```
 
-## 常用操作
+## Common controls
 
-| 操作 | 按键或鼠标 |
+| Action | Key or mouse |
 | --- | --- |
-| 上下移动记录或序列光标 | ↑ / ↓，或 `j` / `k` |
-| 左右移动序列光标 | ← / →，或 `h` / `l` |
-| 上一条 / 下一条记录 | `[` / `]` |
-| 切换左侧列表 / 右侧序列焦点 | 鼠标点击，或 `Ctrl+h` / `Ctrl+l` |
-| 翻页，或跳到开头 / 末尾 | Page Up / Page Down，Home / End |
-| 按名称部分匹配搜索 | `/` 输入名称后按 Enter；`n` 跳到下一个匹配 |
-| 跳到当前序列的指定位置 | `:` 输入 1-based 坐标后按 Enter |
-| 下一个 / 上一个文件标签 | Tab / Shift+Tab |
-| 关闭当前文件标签 | `x` |
-| 选择并复制序列 | 鼠标拖选，或 `v` 后移动光标；`y` 复制 |
-| 显示 / 隐藏质量字符副行 | `Q` |
-| 帮助 / 文件 / 当前记录 / 统计 | `?` 或 F1 / F2 / F3 / F4 |
-| 取消任务并暂停后台索引 | 浏览界面中按 Esc |
-| 退出信息页 / 退出浏览器 | `q` |
+| Move through records or sequence rows | ↑ / ↓, or `j` / `k` |
+| Move the sequence cursor horizontally | ← / →, or `h` / `l` |
+| Previous / next record | `[` / `]` |
+| Focus the record list / sequence pane | Click the pane, or `Ctrl+h` / `Ctrl+l` |
+| Page, or jump to the beginning / end | Page Up / Page Down, Home / End |
+| Search names by partial match | `/`, type a name, then Enter; `n` finds the next match |
+| Jump within the current sequence | `:`, type a 1-based position, then Enter |
+| Next / previous file tab | Tab / Shift+Tab |
+| Close the current file tab | `x` |
+| Select and copy sequence | Drag, or press `v` and move the cursor; `y` copies |
+| Show / hide the quality character row | `Q` |
+| Help / file / current record / statistics | `?` or F1 / F2 / F3 / F4 |
+| Cancel work and pause background indexing | Esc in the browser |
+| Leave an information page / quit the browser | `q` |
 
-鼠标滚轮滚动指针所在区域。信息页中可用 Tab 或左右方向键切换页面。完整按键说明在 `?` 帮助页中。
+The mouse wheel scrolls the pane under the pointer. In an information page, use Tab or Left / Right to switch pages. Press `?` for the full controls.
 
-`F4` 的统计页显示记录数、总长度及最短/最长/平均长度，并提供适用格式的 N50。GC 保留两位小数。统计按需在后台计算，尚未完成的扫描会显示状态。SAM/BAM 按每条比对记录计数，不去重，也不显示 N50。
+The `F4` statistics page shows record count, total length, minimum/maximum/mean length and N50 where applicable. GC is displayed to two decimal places. Statistics run on demand in the background, with status shown while scanning is incomplete. SAM/BAM statistics count each alignment without deduplication and do not show N50.
 
-## 从 yazi 打开
+## Open from yazi
 
-安装后，确保 yazi 能从 PATH 找到 `sq`，再将对应示例合并到 `~/.config/yazi/yazi.toml`。
+After installation, make sure yazi can find `sq` on PATH, then merge the matching example into `~/.config/yazi/yazi.toml`.
 
-| yazi 版本 | 配置示例 |
+| yazi version | Configuration example |
 | --- | --- |
 | 25.4 | [contrib/yazi.toml](contrib/yazi.toml) |
 | 26.9 | [contrib/yazi-26.toml](contrib/yazi-26.toml) |
 
-配置中的 opener 使用 `block = true`。选中文件按 Enter，`sq` 就会接管当前终端；退出后返回 yazi 原来的界面。
+The opener uses `block = true`. Press Enter on a file to open `sq` in the same terminal; quitting returns you to yazi.
 
-## 复制序列
+## Copy sequences
 
-FASTA/FASTQ 中，`y` 根据当前焦点复制内容。
+In FASTA/FASTQ, `y` copies from the focused pane.
 
-| 位置 | 复制结果 |
+| Location | Clipboard content |
 | --- | --- |
-| FASTA 左侧记录列表 | 完整 header 和完整序列，每行 60 个字符 |
-| FASTQ 左侧记录列表 | 完整 FASTQ 记录，保留原始 header 和分隔行 |
-| 右侧序列选区 | 连续序列，不包含显示换行、位置编号和质量副行 |
-| 信息页 | 所选文字；没有选区时复制当前页 |
+| FASTA record list | Full header and complete sequence, wrapped at 60 characters |
+| FASTQ record list | Complete FASTQ record, preserving the original header and separator line |
+| Sequence selection | Continuous sequence, without display line breaks, position numbers or quality characters |
+| Information page | Selected text, or the current page if nothing is selected |
 
-**SAM/BAM 禁用全部复制功能，包括信息页。**
+**All copying is disabled for SAM/BAM, including information pages.**
 
-本地优先使用系统剪贴板：macOS 的 `pbcopy`，Linux 的 `wl-copy`、`xclip` 或 `xsel`。SSH 下通过 OSC 52 请求本地终端写入剪贴板，需要终端支持。复制完整记录会读取并暂存整条记录的内容。
+Local copying prefers the system clipboard: `pbcopy` on macOS, or `wl-copy`, `xclip` or `xsel` on Linux. Over SSH, it sends an OSC 52 request to the local terminal, which must support this feature. Copying a complete record reads and temporarily holds its full contents.
 
-## 大文件与缓存
+## Large files and caches
 
-`sq` 先读取首屏，再逐块建立索引。记录列表和序列内容按当前窗口加载，浏览时不把整个文件装入内存。索引与压缩检查点会保存下来，再次打开可继续使用；源文件变化后会使旧索引失效。首次访问尚未索引的远处位置，仍需推进扫描或解压。
+`sq` reads the first screen, then builds the index in chunks. The record list and sequence content are loaded for the current window, so browsing does not load the whole file into memory. Indexes and compression checkpoints are saved for reuse; changes to the source invalidate the old index. Reaching a distant, unindexed position for the first time still requires scanning or decompression.
 
-缓存位于 `$XDG_CACHE_HOME/seqviz-rs/`，默认是 `~/.cache/seqviz-rs/`。缓存退出后仍保留，不会自动清理；关闭所有 `sq` 后可手动删除，再次打开时会重建。普通 gzip 使用解压检查点，不生成完整解压副本。
+Caches live in `$XDG_CACHE_HOME/seqviz-rs/`, defaulting to `~/.cache/seqviz-rs/`. They persist after exit and are not cleaned automatically. You can delete them after closing all `sq` instances; they will be rebuilt when needed. Ordinary gzip uses decompression checkpoints without creating a full uncompressed copy.
 
-原始文件保持只读。将 FASTA 输出重定向到文件或管道时，`sq` 会输出文本；其他格式需要交互终端。
+Source files remain read-only. Redirecting FASTA output to a file or pipe produces text; other formats require an interactive terminal.
 
-## 配色
+## Colours
 
-默认主题开箱可用。需要调整颜色时，将 [config/config.toml](config/config.toml) 和 [config/content.toml](config/content.toml) 放到 `~/.config/seqviz-rs/`；设置了绝对路径的 `XDG_CONFIG_HOME` 时，使用其下的 `seqviz-rs/` 目录。
+The default theme works without configuration. To change it, place [config/config.toml](config/config.toml) and [config/content.toml](config/content.toml) in `~/.config/seqviz-rs/`. If `XDG_CONFIG_HOME` is set to an absolute path, use its `seqviz-rs/` directory instead.
 
-`config.toml` 配置背景、边框等界面颜色，并引用 `content.toml` 中的碱基、氨基酸和质量配色。
-
-## 文档
-
-- [产品手册](docs/product-manual.md)：功能范围与显示规则。
-- [架构说明](docs/architecture.md)：代码入口和模块关系。
-- [性能记录](docs/performance.md)：测量条件与复现命令。
+`config.toml` sets interface colours such as the background and borders. It references `content.toml` for nucleotide, amino acid and quality colours.
