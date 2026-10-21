@@ -1,10 +1,18 @@
 name: Check
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 jobs:
   test:
+    name: Check (${{ matrix.name }})
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          - name: macOS
+            os: macos-15
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
