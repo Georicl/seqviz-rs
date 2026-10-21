@@ -1,5 +1,5 @@
-name: Build release assets
-run-name: Build ${{ inputs.tag || github.ref_name }} release assets
+name: Release
+run-name: Release ${{ inputs.tag || github.ref_name }}
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
         required: true
         type: string
 
-# This workflow builds downloadable artifacts. Release publication is manual.
+# Build jobs stay read-only; only the final publish job can write a release.
 permissions:
   contents: read
 
@@ -65,6 +65,17 @@ jobs:
               raise SystemExit("Checkout does not match the release tag")
           print(f"Building {tag} from {checked_out}")
           PY
+      - name: Locate CI scripts
+        run: |
+          if [[ -f .github/scripts/terminal_smoke.py && -f .github/scripts/package-release.sh ]]; then
+            echo "CI_SCRIPTS=.github/scripts" >> "$GITHUB_ENV"
+          elif [[ -f scripts/terminal_smoke.py && -f scripts/package-release.sh ]]; then
+            # Older tags predate the move into .github/.
+            echo "CI_SCRIPTS=scripts" >> "$GITHUB_ENV"
+          else
+            echo "CI scripts are missing from the release tag" >&2
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -113,9 +124,9 @@ jobs:
           SQ_BIN: ${{ github.workspace }}/target/${{ matrix.target }}/release/sq
         run: |
           python3 -m pip install pyte==0.8.2
-          python3 scripts/terminal_smoke.py
+          python3 "$CI_SCRIPTS/terminal_smoke.py"
       - name: Package
-        run: bash scripts/package-release.sh "$RELEASE_TARGET" "target/$RELEASE_TARGET/release/sq" dist
+        run: bash "$CI_SCRIPTS/package-release.sh" "$RELEASE_TARGET" "target/$RELEASE_TARGET/release/sq" dist
       - uses: actions/upload-artifact@v7
         with:
           name: seqviz-rs-${{ matrix.target }}
@@ -147,3 +158,41 @@ jobs:
           path: dist/
           if-no-files-found: error
           compression-level: 0
+
+  publish:
+    name: Publish GitHub Release
+    needs: collect
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: release-publish-${{ github.repository }}-${{ inputs.tag || github.ref_name }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: dist
+      - name: Publish verified assets
+        working-directory: dist
+        run: |
+          sha256sum --check SHA256SUMS
+          if draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [[ "$draft" == "false" ]]; then
+              echo "Release $RELEASE_TAG is already published; leaving it unchanged."
+              exit 0
+            fi
+          else
+            gh release create "$RELEASE_TAG" --draft --verify-tag \
+              --title "seqviz-rs $RELEASE_TAG" --generate-notes
+          fi
+          # A failed upload leaves a draft that the next run can finish.
+          gh release upload "$RELEASE_TAG" \
+            seqviz-rs-aarch64-apple-darwin.tar.gz \
+            seqviz-rs-x86_64-apple-darwin.tar.gz \
+            seqviz-rs-x86_64-unknown-linux-musl.tar.gz \
+            SHA256SUMS --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest

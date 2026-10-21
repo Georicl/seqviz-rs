@@ -18,4 +18,4 @@ jobs:
       - run: |
           python3 -m venv /tmp/seqviz-qa
           /tmp/seqviz-qa/bin/pip install pyte==0.8.2
-          /tmp/seqviz-qa/bin/python scripts/terminal_smoke.py
+          /tmp/seqviz-qa/bin/python .github/scripts/terminal_smoke.py

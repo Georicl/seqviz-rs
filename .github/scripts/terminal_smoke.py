@@ -4,7 +4,7 @@ import base64, errno, fcntl, os, re, select, signal, struct, subprocess, sys, te
 from pathlib import Path
 import pyte
 
-root = Path(__file__).resolve().parent.parent
+root = Path(__file__).resolve().parents[2]
 binary = Path(os.environ.get('SQ_BIN', root / 'target/release/sq'))
 out = Path(tempfile.gettempdir()) / 'seqviz-ui-acceptance'
 out.mkdir(exist_ok=True)

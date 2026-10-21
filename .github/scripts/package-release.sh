@@ -20,7 +20,7 @@ if [[ ! -f "$release_binary" || ! -x "$release_binary" ]]; then
 fi
 
 script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-project_directory=$(cd -- "$script_directory/.." && pwd)
+project_directory=$(cd -- "$script_directory/../.." && pwd)
 mkdir -p "$release_output"
 release_output=$(cd -- "$release_output" && pwd)
 staging_directory=$(mktemp -d "${TMPDIR:-/tmp}/seqviz-release.XXXXXX")
