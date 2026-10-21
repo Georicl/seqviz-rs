@@ -161,6 +161,10 @@ FASTA/FASTQ 中，`y` 根据当前焦点复制内容。
 
 `config.toml` 配置背景、边框等界面颜色，并引用 `content.toml` 中的碱基、氨基酸和质量配色。
 
+## 参与贡献与问题反馈
+
+问题反馈和参与开发请查看 [贡献指南](CONTRIBUTING.md)（英文）。
+
 ## 许可协议
 
 本项目采用 [MIT 许可证](LICENSE)。

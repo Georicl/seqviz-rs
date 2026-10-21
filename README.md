@@ -161,6 +161,10 @@ The default theme works without configuration. To change it, place [config/confi
 
 `config.toml` sets interface colours such as the background and borders. It references `content.toml` for nucleotide, amino acid and quality colours.
 
+## Contributing and support
+
+For bug reports, local checks and pull requests, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 [MIT](LICENSE).
