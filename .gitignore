@@ -5,6 +5,7 @@
 /docs/product-manual.md
 /docs/architecture.md
 /docs/performance.md
+/docs/发布与CI流程.md
 
 # Local social-media exports and production files are never published.
 /promo-local/

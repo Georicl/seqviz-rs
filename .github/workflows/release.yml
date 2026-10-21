@@ -196,3 +196,40 @@ jobs:
             seqviz-rs-x86_64-unknown-linux-musl.tar.gz \
             SHA256SUMS --clobber
           gh release edit "$RELEASE_TAG" --draft=false --latest
+
+  homebrew:
+    name: Update Homebrew tap
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    concurrency:
+      group: homebrew-tap
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Georicl/homebrew-tap
+          ref: main
+          ssh-key: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+          path: homebrew-tap
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Update formula from published release
+        working-directory: homebrew-tap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/update-formula.py --tag "$RELEASE_TAG"
+      - name: Commit formula changes
+        working-directory: homebrew-tap
+        run: |
+          git add Formula/seqviz-rs.rb
+          if git diff --cached --quiet; then
+            echo "Homebrew formula is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update seqviz-rs to $RELEASE_TAG"
+          git push origin HEAD:main

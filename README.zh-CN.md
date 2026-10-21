@@ -35,6 +35,25 @@ sq proteins.faa alignments.bam
 
 ## 安装与试用
 
+### Homebrew
+
+macOS（Apple Silicon 或 Intel）和 Linux x86_64 可以通过 Homebrew 安装，运行命令为 `sq`。
+
+```sh
+brew install Georicl/tap/seqviz-rs
+sq --version
+```
+
+升级到新版本：
+
+```sh
+brew upgrade Georicl/tap/seqviz-rs
+```
+
+主题和 yazi 配置示例安装在 `$(brew --prefix seqviz-rs)/share/seqviz-rs/` 下，分别位于 `config/` 和 `contrib/` 目录。
+
+### 下载二进制文件
+
 从 [最新 Release](https://github.com/Georicl/seqviz-rs/releases/latest) 下载编译好的 `sq`，无需安装 Rust。
 
 | 平台 | 下载 |
@@ -141,3 +160,7 @@ FASTA/FASTQ 中，`y` 根据当前焦点复制内容。
 默认主题开箱可用。需要调整颜色时，将 [config/config.toml](config/config.toml) 和 [config/content.toml](config/content.toml) 放到 `~/.config/seqviz-rs/`；设置了绝对路径的 `XDG_CONFIG_HOME` 时，使用其下的 `seqviz-rs/` 目录。
 
 `config.toml` 配置背景、边框等界面颜色，并引用 `content.toml` 中的碱基、氨基酸和质量配色。
+
+## 许可协议
+
+本项目采用 [MIT 许可证](LICENSE)。

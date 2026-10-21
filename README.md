@@ -35,6 +35,25 @@ Sequences wrap to the window width, with positions starting at 1. Each file keep
 
 ## Install and try it
 
+### Homebrew
+
+Install on macOS (Apple Silicon or Intel) or Linux x86_64 with Homebrew. The command is `sq`.
+
+```sh
+brew install Georicl/tap/seqviz-rs
+sq --version
+```
+
+Upgrade to a newer release with:
+
+```sh
+brew upgrade Georicl/tap/seqviz-rs
+```
+
+Theme and yazi examples are installed under `$(brew --prefix seqviz-rs)/share/seqviz-rs/`, in the `config/` and `contrib/` directories.
+
+### Download a binary
+
 Download a ready-to-run `sq` from the [latest release](https://github.com/Georicl/seqviz-rs/releases/latest). Rust is not required.
 
 | Platform | Download |
@@ -141,3 +160,7 @@ Source files remain read-only. Redirecting FASTA output to a file or pipe produc
 The default theme works without configuration. To change it, place [config/config.toml](config/config.toml) and [config/content.toml](config/content.toml) in `~/.config/seqviz-rs/`. If `XDG_CONFIG_HOME` is set to an absolute path, use its `seqviz-rs/` directory instead.
 
 `config.toml` sets interface colours such as the background and borders. It references `content.toml` for nucleotide, amino acid and quality colours.
+
+## License
+
+[MIT](LICENSE).
