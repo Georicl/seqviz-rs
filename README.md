@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.png" width="200" alt="seqviz-rs logo">
+  <img src="assets/logo.png" width="200" alt="seqviz-rs logo">
 </p>
 
 # seqviz-rs
@@ -18,7 +18,7 @@ sq proteins.faa alignments.bam
 
 You can also open files from yazi with Enter, then press `q` to return to the file list.
 
-[![Terminal demo: FASTA selection and copying, gzip FASTQ quality, protein sequences, BAM attributes and statistics](docs/assets/demo.gif)](docs/assets/demo.gif)
+[![Terminal demo: FASTA selection and copying, gzip FASTQ quality, protein sequences, BAM attributes and statistics](assets/demo.gif)](assets/demo.gif)
 
 ## What you can see
 
