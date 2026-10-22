@@ -8,6 +8,12 @@ impl App {
             self.quit = true;
             return;
         }
+        if self.hits.too_small {
+            if key.code == KeyCode::Char('q') {
+                self.quit = true;
+            }
+            return;
+        }
         if self.view().captures_input() {
             self.view_mut().key(key);
         } else {

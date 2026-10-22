@@ -417,8 +417,9 @@ impl DocumentView for SequenceView {
         self.request_view();
     }
     fn update(&mut self, update: ModuleUpdate) {
-        let ModuleUpdate::Sequence(update) = update;
-        self.apply_update(update.payload);
+        if let ModuleUpdate::Sequence(update) = update {
+            self.apply_update(update.payload);
+        }
     }
     fn actions(&mut self) -> Vec<Action> {
         std::mem::take(&mut self.actions)

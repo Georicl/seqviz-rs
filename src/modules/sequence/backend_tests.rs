@@ -1,6 +1,8 @@
 use super::*;
-use crate::modules::session::Worker;
+use crate::core::tasks::TaskWorker;
 use tempfile::TempDir;
+
+type Worker = TaskWorker<Request, Update>;
 
 // Large fixtures need time to finish in debug builds on shared CI hosts.
 const LARGE_FIXTURE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -32,7 +34,11 @@ impl Fixture {
     }
 
     fn start(&self, initial: Vec<Request>) -> Worker {
-        Worker::start_with_requests(self.paths.clone(), self.cache.clone(), initial)
+        let paths = self.paths.clone();
+        let cache = self.cache.clone();
+        TaskWorker::spawn_with_requests(Request::Quit, initial, move |updates, cancel| {
+            Backend::new(SessionFiles::new(paths), cache, updates, cancel)
+        })
     }
 }
 

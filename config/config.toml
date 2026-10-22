@@ -5,6 +5,15 @@
 [display]
 show_quality = true
 
+[vcf]
+pass_color = "#7ed397"
+filter_color = "#f0c674"
+missing_color = "#8f9bb3"
+# ALT1, ALT2, ... use these colours in both GT and AD; REF keeps the foreground.
+allele_colors = ["#7ab7ff", "#be9bf3", "#78d5d4", "#f0c674", "#f18594"]
+show_ad_bars = true
+detail_rows = 10
+
 [theme]
 # Relative paths are resolved against this configuration file's directory.
 content = "content.toml"

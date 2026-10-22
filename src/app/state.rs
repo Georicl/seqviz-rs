@@ -3,6 +3,7 @@ use super::{config::Config, layout};
 use crate::{
     core::clipboard::{ClipboardOutput, ClipboardService},
     modules::{
+        protocol::ModuleUpdate,
         registry,
         session::Worker,
         view::{Action, DocumentView},
@@ -32,17 +33,22 @@ pub(crate) struct App {
     pub quit: bool,
     pub worker: Worker,
     clipboard: ClipboardService,
+    factory: registry::ViewFactory,
 }
 impl App {
     pub fn new(paths: Vec<PathBuf>, config: Config, worker: Worker) -> Self {
         let clock = Arc::new(AtomicU64::new(0));
-        let factory =
-            registry::ViewFactory::new(config.theme.clone(), config.sequence.clone(), clock);
+        let factory = registry::ViewFactory::new(
+            config.theme.clone(),
+            config.sequence.clone(),
+            config.vcf.clone(),
+            clock,
+        );
         let tabs = paths
             .into_iter()
             .enumerate()
             .map(|(file, path)| Tab {
-                view: factory.create(path.clone(), file),
+                view: factory.loading(path.clone(), file),
                 path,
                 closed: false,
             })
@@ -56,6 +62,7 @@ impl App {
             quit: false,
             worker,
             clipboard: ClipboardService::start(),
+            factory,
         }
     }
     pub fn view(&self) -> &dyn DocumentView {
@@ -115,7 +122,18 @@ impl App {
                 continue;
             };
             if let Some(tab) = self.tabs.get_mut(file).filter(|t| !t.closed) {
-                tab.view.update(update);
+                if let ModuleUpdate::Opened { module, .. } = update {
+                    let mut view = self.factory.create(tab.path.clone(), file, module);
+                    view.activate();
+                    if file != self.active {
+                        view.deactivate();
+                    }
+                    view.prepare(self.hits.body);
+                    tab.view = view;
+                    self.redraw = true;
+                } else {
+                    tab.view.update(update);
+                }
             }
         }
         while let Ok(update) = self.clipboard.updates.try_recv() {
@@ -144,7 +162,7 @@ impl App {
         self.flush_actions();
     }
     pub fn switch_tab(&mut self, next: usize) {
-        if next >= self.tabs.len() || self.tabs[next].closed {
+        if next == self.active || next >= self.tabs.len() || self.tabs[next].closed {
             return;
         }
         self.view_mut().deactivate();
@@ -206,7 +224,7 @@ impl App {
                     .file_name()
                     .unwrap_or_default()
                     .to_string_lossy();
-                (i, format!(" {}:{} ", i + 1, name))
+                (i, name.into_owned())
             })
             .collect()
     }

@@ -1,4 +1,5 @@
-//! Sequence-specific nucleotide, amino-acid and Phred colour mappings.
+//! Sequence colours, reusing the shared nucleotide palette.
+use crate::widgets::nucleotides::NucleotidePalette;
 use crate::widgets::theme::parse_color;
 use ratatui::style::Color;
 use serde::Deserialize;
@@ -6,7 +7,7 @@ use std::io;
 
 #[derive(Debug, Clone)]
 pub struct ContentPalette {
-    nucleotides: [Color; 8],
+    nucleotides: NucleotidePalette,
     amino_acids: [Color; 10],
     quality: Vec<(u8, Color)>,
 }
@@ -20,7 +21,7 @@ impl Default for ContentPalette {
         let purple = Color::Rgb(190, 155, 243);
         let grey = Color::Rgb(143, 155, 179);
         Self {
-            nucleotides: [green, blue, yellow, red, red, purple, grey, grey],
+            nucleotides: NucleotidePalette::default(),
             amino_acids: [
                 yellow,
                 green,
@@ -40,17 +41,11 @@ impl Default for ContentPalette {
 
 impl ContentPalette {
     pub fn nucleotide_color(&self, base: u8) -> Color {
-        let index = match base.to_ascii_uppercase() {
-            b'A' => 0,
-            b'C' => 1,
-            b'G' => 2,
-            b'T' => 3,
-            b'U' => 4,
-            b'R' | b'Y' | b'S' | b'W' | b'K' | b'M' | b'B' | b'D' | b'H' | b'V' | b'N' => 5,
-            b'-' | b'.' => 6,
-            _ => 7,
-        };
-        self.nucleotides[index]
+        self.nucleotides.nucleotide_color(base)
+    }
+
+    pub fn nucleotides(&self) -> &NucleotidePalette {
+        &self.nucleotides
     }
 
     pub fn amino_acid_color(&self, residue: u8) -> Color {
@@ -80,20 +75,7 @@ impl ContentPalette {
 
     pub(crate) fn apply(&mut self, text: &str) -> io::Result<()> {
         let raw: RawContent = toml::from_str(text).map_err(|e| invalid(e.to_string()))?;
-        for (name, value) in raw.nucleotides {
-            let index = match name.as_str() {
-                "a" => 0,
-                "c" => 1,
-                "g" => 2,
-                "t" => 3,
-                "u" => 4,
-                "ambiguous" => 5,
-                "gap" => 6,
-                "unknown" => 7,
-                _ => return Err(invalid(format!("Unknown nucleotide colour: {name}"))),
-            };
-            self.nucleotides[index] = parse_color(&value, &format!("nucleotides.{name}"))?;
-        }
+        self.nucleotides.apply(raw.nucleotides)?;
         for (name, value) in raw.amino_acids {
             let index = match name.as_str() {
                 "nonpolar" => 0,

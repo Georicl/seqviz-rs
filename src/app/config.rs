@@ -2,6 +2,7 @@
 pub use crate::core::paths::{cache_directory, config_path};
 use crate::modules::sequence::config::SequenceConfig;
 pub use crate::modules::sequence::palette::ContentPalette;
+use crate::modules::vcf::config::VcfConfig;
 pub use crate::widgets::theme::Theme;
 use crate::widgets::theme::set_color;
 use serde::Deserialize;
@@ -15,6 +16,7 @@ use std::{
 pub struct Config {
     pub theme: Theme,
     pub sequence: SequenceConfig,
+    pub vcf: VcfConfig,
 }
 
 // Existing callers can continue accessing display settings while ownership lives
@@ -54,6 +56,7 @@ impl Config {
         let mut config = Self {
             theme: Theme::default(),
             sequence: raw.display,
+            vcf: raw.vcf,
         };
         let theme = &mut config.theme;
         set_color(
@@ -84,6 +87,7 @@ impl Config {
                 .apply(&content_text)
                 .map_err(|e| invalid(format!("{}: {e}", content_path.display())))?;
         }
+        config.vcf.nucleotides = config.sequence.palette.nucleotides().clone();
         Ok(config)
     }
 }
@@ -93,6 +97,7 @@ impl Config {
 struct RawConfig {
     display: SequenceConfig,
     theme: RawTheme,
+    vcf: VcfConfig,
 }
 
 #[derive(Default, Deserialize)]
@@ -127,6 +132,10 @@ mod tests {
             Color::Rgb(126, 211, 151)
         );
         assert_eq!(
+            config.vcf.nucleotides.nucleotide_color(b'a'),
+            config.sequence.palette.nucleotide_color(b'a')
+        );
+        assert_eq!(
             config.sequence.palette.amino_acid_color(b'D'),
             config.sequence.palette.amino_acid_color(b'e')
         );
@@ -146,6 +155,69 @@ mod tests {
         assert!(!config.show_quality);
         assert_eq!(config.theme.focus, Color::Rgb(17, 34, 51));
         assert_eq!(config.theme.background, Theme::default().background);
+        assert_eq!(config.vcf.show_ad_bars, VcfConfig::default().show_ad_bars);
+    }
+
+    #[test]
+    fn legacy_content_palette_is_shared_with_vcf_and_keeps_relative_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let palettes = directory.path().join("palettes");
+        fs::create_dir(&palettes).unwrap();
+        fs::write(
+            palettes.join("shared.toml"),
+            "[nucleotides]\na='#123456'\nc='cyan'\nu='magenta'\nambiguous='yellow'\ngap='red'\nunknown='blue'\n[amino_acids]\nbasic='green'",
+        )
+        .unwrap();
+        let path = directory.path().join("config.toml");
+        // The old configuration format also applies the nucleotide settings to VCF.
+        for extra in ["", "\n[vcf]\npass_color='#112233'\nshow_ad_bars=false\n"] {
+            let config = Config::parse(
+                &format!(
+                    "[display]\nshow_quality=false\n[theme]\ncontent='palettes/shared.toml'\n{extra}"
+                ),
+                &path,
+            )
+            .unwrap();
+            assert!(!config.sequence.show_quality);
+            assert_eq!(
+                config.vcf.nucleotides.nucleotide_color(b'A'),
+                Color::Rgb(18, 52, 86)
+            );
+            assert_eq!(config.vcf.nucleotides.nucleotide_color(b'C'), Color::Cyan);
+            assert_eq!(
+                config.vcf.nucleotides.nucleotide_color(b'U'),
+                Color::Magenta
+            );
+            for base in u8::MIN..=u8::MAX {
+                assert_eq!(
+                    config.vcf.nucleotides.nucleotide_color(base),
+                    config.sequence.palette.nucleotide_color(base)
+                );
+            }
+            assert_eq!(config.sequence.palette.amino_acid_color(b'K'), Color::Green);
+            if !extra.is_empty() {
+                assert_eq!(config.vcf.pass_color, Color::Rgb(17, 34, 51));
+                assert!(!config.vcf.show_ad_bars);
+            }
+        }
+    }
+
+    #[test]
+    fn vcf_settings_do_not_accept_unknown_or_sequence_fields() {
+        for text in [
+            "unknown=true",
+            "[vcf]\npass_colr='green'",
+            "[vcf]\nshow_quality=false",
+            "[display]\nshow_ad_bars=false",
+            "[theme]\npass_color='green'",
+            "[vcf]\npass_color='not-a-colour'",
+            "[vcf]\nallele_colors=[]",
+        ] {
+            assert!(
+                Config::parse(text, Path::new("config.toml")).is_err(),
+                "{text}"
+            );
+        }
     }
 
     #[test]

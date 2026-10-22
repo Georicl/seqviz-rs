@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag, such as v0.1.0
+        description: Existing release tag, such as v0.2.0
         required: true
         type: string
 
@@ -125,6 +125,9 @@ jobs:
         run: |
           python3 -m pip install pyte==0.8.2
           python3 "$CI_SCRIPTS/terminal_smoke.py"
+          if [[ -f "$CI_SCRIPTS/vcf_terminal_smoke.py" ]]; then
+            python3 "$CI_SCRIPTS/vcf_terminal_smoke.py"
+          fi
       - name: Package
         run: bash "$CI_SCRIPTS/package-release.sh" "$RELEASE_TARGET" "target/$RELEASE_TARGET/release/sq" dist
       - uses: actions/upload-artifact@v7
