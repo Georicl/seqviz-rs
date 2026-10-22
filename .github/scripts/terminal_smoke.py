@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Real PTY acceptance checks. Requires pyte; build with cargo build --release first."""
-import base64, errno, fcntl, os, re, select, signal, struct, subprocess, sys, tempfile, termios, time
+import base64, codecs, errno, fcntl, os, re, select, signal, struct, subprocess, sys, tempfile, termios, time
 from pathlib import Path
 import pyte
 
@@ -21,6 +21,7 @@ with tempfile.TemporaryDirectory(prefix='seqviz-ui-') as tmp:
     process = subprocess.Popen([str(binary), str(fa), str(fq), str(root/'test/alignments.sam'), str(root/'test/alignments.bam')], stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True)
     screen = pyte.Screen(100, 28)
     stream = pyte.Stream(screen)
+    decoder = codecs.getincrementaldecoder('utf-8')('replace')
     raw = bytearray()
     def read(timeout=.05):
         ready, _, _ = select.select([master], [], [], timeout)
@@ -30,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='seqviz-ui-') as tmp:
                 if e.errno == errno.EIO: return
                 raise
             raw.extend(data)
-            stream.feed(data.decode('utf-8','replace'))
+            stream.feed(decoder.decode(data))
     def content(): return '\n'.join(screen.display)
     def wait_for(test, label, timeout=8):
         until=time.monotonic()+timeout
