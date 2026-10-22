@@ -11,6 +11,33 @@ fn run(paths: &[&Path]) -> std::process::Output {
 }
 
 #[test]
+fn help_and_version_describe_the_current_cli_contract() {
+    let help = Command::new(env!("CARGO_BIN_EXE_sq"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    assert!(help.stderr.is_empty());
+    let text = String::from_utf8(help.stdout).unwrap();
+    assert!(text.contains("ordinary VCF, including gzip/BGZF"));
+    assert!(text.contains("VCF: c contig"));
+    assert!(text.contains(
+        "Redirected output prints FASTA, including gzip/BGZF, using the browser reader.\nOther formats require an interactive terminal."
+    ));
+
+    let version = Command::new(env!("CARGO_BIN_EXE_sq"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(version.status.success());
+    assert!(version.stderr.is_empty());
+    assert_eq!(
+        version.stdout,
+        format!("sq {}\n", env!("CARGO_PKG_VERSION")).as_bytes()
+    );
+}
+
+#[test]
 fn prints_all_records_for_each_input_file() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/test.fa");
     let output = run(&[&fixture, &fixture]);
@@ -74,9 +101,12 @@ fn non_fasta_redirects_are_rejected_without_copying_records() {
     let tmp = tempfile::tempdir().unwrap();
     let fastq = tmp.path().join("reads.fastq");
     std::fs::write(&fastq, b"@read\nACGT\n+\nIIII\n").unwrap();
+    let vcf = tmp.path().join("variants.txt");
+    std::fs::write(&vcf, b"##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t10\t.\tA\tC\t.\tPASS\t.\n").unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for path in [
         fastq,
+        vcf,
         root.join("test/alignments.sam"),
         root.join("test/alignments.bam"),
     ] {

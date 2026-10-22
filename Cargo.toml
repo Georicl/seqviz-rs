@@ -1,6 +1,6 @@
 [package]
 name = "seqviz"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 
@@ -21,6 +21,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 base64 = "0.22"
 unicode-width = "0.2"
+noodles-vcf = "0.94.0"
 
 [dev-dependencies]
 tempfile = "3"

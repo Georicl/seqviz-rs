@@ -1,11 +1,11 @@
 # Yazi 25.4: merge these entries into ~/.config/yazi/yazi.toml.
 [opener]
 sq = [
-  { run = 'sq -- "$@"', block = true, desc = "Sequence browser", for = "unix" },
+  { run = 'sq -- "$@"', block = true, desc = "Sequence and variant browser", for = "unix" },
 ]
 
 [open]
 prepend_rules = [
-  { name = "*.{fa,fasta,fna,fas,fsa,faa,pep,fq,fastq,sam,bam}", use = "sq" },
-  { name = "*.{fa,fasta,fna,fas,fsa,faa,pep,fq,fastq,sam}.{gz,bgz,bgzf}", use = "sq" },
+  { name = "*.{fa,fasta,fna,fas,fsa,faa,pep,fq,fastq,sam,bam,vcf}", use = "sq" },
+  { name = "*.{fa,fasta,fna,fas,fsa,faa,pep,fq,fastq,sam,vcf}.{gz,bgz,bgzf}", use = "sq" },
 ]

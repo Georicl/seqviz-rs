@@ -1,6 +1,7 @@
 # Semantic colours, independent of the interface layout.
 # Names such as "green" and RGB colours such as "#7ed397" are accepted.
 
+# Shared by sequence content and literal VCF REF/ALT alleles.
 [nucleotides]
 a = "#7ed397"
 c = "#7ab7ff"
