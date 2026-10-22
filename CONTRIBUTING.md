@@ -40,16 +40,18 @@ cargo run --release --locked -- test/test.fa test/alignments.bam
 
 | Area | Files |
 | --- | --- |
-| CLI parsing and startup | `src/cli.rs`, `src/main.rs` |
-| Compressed input, format readers and persistent indexes | `src/source.rs`, `src/data.rs`, `src/data/` |
-| Background work and UI messages | `src/worker.rs`, `src/worker/` |
-| Browser state, input, layout and rendering | `src/ui/` |
-| Clipboard backends | `src/clipboard.rs`, `src/clipboard/` |
-| Configuration, header attributes and text output | `src/config.rs`, `src/headers.rs`, `src/display.rs` |
+| CLI parsing, startup and application shell | `src/main.rs`, `src/app/` |
+| Shared input, cache and task services | `src/core/source.rs`, `src/core/cache.rs`, `src/core/tasks/` |
+| Sequence readers and persistent indexes | `src/modules/sequence/data/` |
+| Module registration, messages and sessions | `src/modules/registry.rs`, `src/modules/protocol.rs`, `src/modules/session.rs` |
+| Document pages and sequence interaction | `src/modules/view.rs`, `src/modules/sequence/view/` |
+| Reusable terminal components | `src/widgets/` |
+| Clipboard backends | `src/core/clipboard/`, `src/app/terminal.rs` |
+| Configuration, header attributes and text output | `src/app/config.rs`, `src/modules/sequence/config.rs`, `src/modules/sequence/palette.rs`, `src/modules/sequence/headers.rs`, `src/modules/sequence/output.rs` |
 
 Unit tests live beside the code. `tests/` contains integration tests, and `test/` holds the shared FASTA, SAM and BAM fixtures.
 
-For a behaviour fix, add a regression test that fails before the fix and passes afterwards. Keep new fixtures small and synthetic. For terminal interactions, cover the affected state or layout in `src/ui/tests.rs`; extend the PTY check when reproducing the problem requires real terminal events. Source files must remain read-only, and copying must remain disabled throughout SAM/BAM views.
+For a behaviour fix, add a regression test that fails before the fix and passes afterwards. Keep new fixtures small and synthetic. For terminal interactions, cover the affected state or layout in `src/app/tests.rs` or `src/modules/sequence/view/tests.rs`; extend the PTY check when reproducing the problem requires real terminal events. Source files must remain read-only, and copying must remain disabled throughout SAM/BAM views.
 
 ## Send a pull request
 

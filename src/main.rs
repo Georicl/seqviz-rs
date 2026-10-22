@@ -1,10 +1,5 @@
-use seqviz::{
-    cli,
-    config::{self, Config},
-    data::Dataset,
-    display, ui,
-};
-use std::io::{self, IsTerminal, Write};
+use seqviz::app::cli;
+use std::io;
 
 fn main() -> io::Result<()> {
     let paths = match cli::parse(std::env::args_os().skip(1))? {
@@ -20,18 +15,5 @@ fn main() -> io::Result<()> {
         }
         cli::Command::Browse(paths) => paths,
     };
-    if io::stdout().is_terminal() && io::stdin().is_terminal() {
-        return ui::run(paths, Config::load()?);
-    }
-
-    let cache = config::cache_directory();
-    let stdout = io::stdout();
-    let mut output = stdout.lock();
-
-    for path in paths {
-        let mut dataset = Dataset::open(&path, &cache)?;
-        display::write_fasta(&mut dataset, &mut output, display::terminal_width)?;
-    }
-
-    output.flush()
+    seqviz::app::run(paths)
 }
