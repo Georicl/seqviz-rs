@@ -19,11 +19,10 @@ fn help_and_version_describe_the_current_cli_contract() {
     assert!(help.status.success());
     assert!(help.stderr.is_empty());
     let text = String::from_utf8(help.stdout).unwrap();
-    assert!(text.contains("ordinary VCF, including gzip/BGZF"));
-    assert!(text.contains("VCF: c contig"));
-    assert!(text.contains(
-        "Redirected output prints FASTA, including gzip/BGZF, using the browser reader.\nOther formats require an interactive terminal."
-    ));
+    assert!(text.contains("A terminal browser for bioformatics file"));
+    assert!(text.contains("Usage: sq <FILE>..."));
+    assert!(text.contains("-h, --help"));
+    assert!(text.contains("-V, --version"));
 
     let version = Command::new(env!("CARGO_BIN_EXE_sq"))
         .arg("--version")
@@ -33,7 +32,7 @@ fn help_and_version_describe_the_current_cli_contract() {
     assert!(version.stderr.is_empty());
     assert_eq!(
         version.stdout,
-        format!("sq {}\n", env!("CARGO_PKG_VERSION")).as_bytes()
+        format!("seqviz {}\n", env!("CARGO_PKG_VERSION")).as_bytes()
     );
 }
 
