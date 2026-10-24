@@ -1,24 +1,19 @@
 //! Command-line parsing. Opening files remains the default command.
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use std::path::PathBuf;
 
-#[derive(Subcommand)]
-pub enum Commands {
-    /// Open files in browser
-    Browse {
-        /// Files to open
-        #[arg(short, long, required = true, num_args = 1..)]
-        files: Vec<PathBuf>,
-    },
-}
-
 #[derive(Parser)]
-#[command(name = "sq")]
-#[command(version)]
+#[command(
+    name = "sq",
+    display_name = "seqviz",
+    version,
+    about = "A terminal browser for bioformatics file"
+)]
 pub struct Cli {
-    #[command(subcommand)]
-    pub command: Commands,
+    /// Files to open
+    #[arg(value_name = "FILE", required = true, num_args = 1..)]
+    pub files: Vec<PathBuf>,
 }
 
 #[cfg(test)]
@@ -27,8 +22,11 @@ mod tests {
 
     #[test]
     fn double_dash_preserves_option_like_file_names() {
-        let args = Cli::try_parse_from(["sq", "browse", "--files", "a.fa", "a b.fa"]).unwrap();
-        let Commands::Browse { files } = args.command;
-        assert_eq!(files, vec![PathBuf::from("a.fa"), PathBuf::from("a b.fa")]);
+        let args = Cli::try_parse_from(["sq", "--", "--help", "a b.fa"]).unwrap();
+
+        assert_eq!(
+            args.files,
+            vec![PathBuf::from("--help"), PathBuf::from("a b.fa"),]
+        );
     }
 }
