@@ -1,38 +1,19 @@
 //! Command-line parsing. Opening files remains the default command.
 
-use std::{ffi::OsString, io, path::PathBuf};
+use clap::Parser;
+use std::path::PathBuf;
 
-pub enum Command {
-    Browse(Vec<PathBuf>),
-    Help,
-    Version,
-}
-
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> io::Result<Command> {
-    let mut paths = Vec::new();
-    let mut positional = false;
-    for arg in args {
-        if !positional {
-            if arg == "--" {
-                positional = true;
-                continue;
-            }
-            if arg == "--help" || arg == "-h" {
-                return Ok(Command::Help);
-            }
-            if arg == "--version" || arg == "-V" {
-                return Ok(Command::Version);
-            }
-        }
-        paths.push(PathBuf::from(arg));
-    }
-    if paths.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Usage: sq <file> [file …]",
-        ));
-    }
-    Ok(Command::Browse(paths))
+#[derive(Parser)]
+#[command(
+    name = "sq",
+    display_name = "seqviz",
+    version,
+    about = "A terminal browser for bioformatics file"
+)]
+pub struct Cli {
+    /// Files to open
+    #[arg(value_name = "FILE", required = true, num_args = 1..)]
+    pub files: Vec<PathBuf>,
 }
 
 #[cfg(test)]
@@ -41,10 +22,11 @@ mod tests {
 
     #[test]
     fn double_dash_preserves_option_like_file_names() {
-        let Command::Browse(paths) = parse(["--", "--help", "a b.fa"].map(OsString::from)).unwrap()
-        else {
-            panic!("expected file paths");
-        };
-        assert_eq!(paths, [PathBuf::from("--help"), PathBuf::from("a b.fa")]);
+        let args = Cli::try_parse_from(["sq", "--", "--help", "a b.fa"]).unwrap();
+
+        assert_eq!(
+            args.files,
+            vec![PathBuf::from("--help"), PathBuf::from("a b.fa"),]
+        );
     }
 }
