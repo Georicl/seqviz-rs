@@ -2,6 +2,7 @@
 use super::{Format, SeqType, invalid};
 use std::{io, path::Path};
 
+/// Recognize decoded BAM, FASTA, FASTQ or SAM content, using the path only for empty input.
 pub(super) fn detect_format(prefix: &[u8], path: &Path) -> io::Result<Format> {
     if prefix.starts_with(b"BAM\x01") {
         return Ok(Format::Bam);
@@ -72,6 +73,7 @@ pub(super) fn detect_format(prefix: &[u8], path: &Path) -> io::Result<Format> {
         "Input is not recognised as FASTA, FASTQ, SAM or BAM",
     ))
 }
+/// Classify a sequence sample by its letters, requiring a protein-specific residue for protein.
 pub(super) fn detect_type(sample: &[u8]) -> SeqType {
     let non_dna: Vec<u8> = sample
         .iter()

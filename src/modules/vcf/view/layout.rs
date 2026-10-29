@@ -1,17 +1,28 @@
+//! Terminal geometry shared by the VCF renderer and input hit testing.
 use ratatui::layout::Rect;
 
+/// Prepared terminal rectangles shared by rendering and pointer hit testing.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Layout {
+    /// Entire document content rectangle.
     pub area: Rect,
+    /// Version, counts and current-locus lines.
     pub header: Rect,
+    /// Variant table including its border and column heading.
     pub table: Rect,
+    /// Variant data rows, excluding border and column heading.
     pub rows: Rect,
+    /// Detail panel including its border, tabs and heading.
     pub details: Rect,
+    /// Single row of INFO, Samples and Raw tab labels.
     pub detail_tabs: Rect,
+    /// Column headings for the active detail representation.
     pub detail_heading: Rect,
+    /// Visible detail text and pointer-selection area.
     pub detail_body: Rect,
 }
 
+/// Remove a one-cell border, saturating widths and heights for tiny terminals.
 pub(super) fn inset(area: Rect) -> Rect {
     Rect::new(
         area.x.saturating_add(1),
@@ -21,6 +32,7 @@ pub(super) fn inset(area: Rect) -> Rect {
     )
 }
 
+/// Reserve header/table space and show details only when enough rows remain.
 pub(super) fn calculate(area: Rect, detail_rows: u16) -> Layout {
     let header_height = area.height.min(2);
     let remaining = area.height.saturating_sub(header_height);
@@ -74,6 +86,7 @@ pub(super) fn calculate(area: Rect, detail_rows: u16) -> Layout {
     }
 }
 
+/// Test membership using inclusive left/top and exclusive right/bottom boundaries.
 pub(super) fn contains(area: Rect, x: u16, y: u16) -> bool {
     x >= area.x && x < area.right() && y >= area.y && y < area.bottom()
 }

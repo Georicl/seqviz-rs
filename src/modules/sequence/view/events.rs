@@ -5,6 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 
 impl SequenceView {
+    /// Dispatch a key to the active prompt, information page or sequence browsing controls.
     pub(crate) fn key(&mut self, key: KeyEvent) {
         self.redraw = true;
         if self.input.is_some() {
@@ -131,6 +132,7 @@ impl SequenceView {
         }
     }
 
+    /// Edit or submit the active prompt, translating user positions from one-based to zero-based.
     pub(crate) fn input_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.input = None,
@@ -177,6 +179,7 @@ impl SequenceView {
         }
     }
 
+    /// Move between records or move the sequence cursor by a signed number of displayed rows.
     pub(crate) fn move_vertical(&mut self, delta: i64) {
         if self.focus == Focus::Records {
             self.choose_record(self.tab().record.saturating_add_signed(delta));
@@ -185,6 +188,7 @@ impl SequenceView {
         }
     }
 
+    /// Move the zero-based cursor, extend a selection and scroll only when the cursor leaves the viewport.
     pub(crate) fn move_cursor(&mut self, delta: i64) {
         let width = self.hits.bases_per_line.max(1) as u64;
         let count = self.count() as u64;
@@ -208,6 +212,7 @@ impl SequenceView {
         }
     }
 
+    /// Page the focused pane by its visible record count or sequence capacity.
     pub(crate) fn scroll(&mut self, delta: i64) {
         if self.focus == Focus::Records {
             self.choose_record(
@@ -229,6 +234,7 @@ impl SequenceView {
         }
     }
 
+    /// Jump to a known final record/base, or resume indexing and defer the jump until scanning stops.
     pub(crate) fn end(&mut self) {
         if let Some(snapshot) = &self.tab().snapshot {
             if self.focus == Focus::Records && snapshot.progress.complete {
@@ -253,16 +259,19 @@ impl SequenceView {
         self.tab_mut().message = "Finding the end… Esc cancels".into();
     }
 
+    /// Map a pointer through the target viewport using the indexed length of the current record.
     pub(crate) fn sequence_position(&self, x: u16, y: u16) -> Option<u64> {
         let record = self.tab().snapshot.as_ref()?.record.as_ref()?;
         self.hits
             .sequence_position(self.tab().start, record.length, x, y)
     }
 
+    /// Translate a pointer into a row and column of the reflowed information text.
     pub(crate) fn info_position(&self, x: u16, y: u16) -> (usize, usize) {
         self.info.position(self.hits.info, x, y)
     }
 
+    /// Handle pane focus, record selection, sequence/text dragging and wheel scrolling.
     pub(crate) fn mouse(&mut self, mouse: MouseEvent) {
         self.redraw = true;
         if self.hits.too_small {
@@ -360,6 +369,7 @@ impl SequenceView {
         }
     }
 
+    /// Scroll one sequence row at a held edge and extend selection even before new data arrives.
     pub(crate) fn drag_scroll(&mut self) {
         if self.hits.too_small || self.hits.sequence_rows == 0 {
             return;
@@ -402,6 +412,7 @@ impl SequenceView {
     }
 }
 
+/// Test a terminal point against a rectangle with exclusive right and bottom edges.
 fn contains(rect: Rect, x: u16, y: u16) -> bool {
     x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()
 }

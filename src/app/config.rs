@@ -12,22 +12,29 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Resolved application theme and per-module display settings.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
+    /// Colours for application chrome and shared widgets.
     pub theme: Theme,
+    /// Display preferences and content colours for sequence documents.
     pub sequence: SequenceConfig,
+    /// Variant-browser layout and colour settings.
     pub vcf: VcfConfig,
 }
 
 // Existing callers can continue accessing display settings while ownership lives
 // in SequenceConfig; shared Theme no longer contains any sequence palette.
 impl Deref for Config {
+    /// Sequence settings exposed for backward-compatible field access.
     type Target = SequenceConfig;
+    /// Expose sequence settings through the legacy top-level configuration interface.
     fn deref(&self) -> &Self::Target {
         &self.sequence
     }
 }
 impl DerefMut for Config {
+    /// Allow legacy callers to update the embedded sequence settings.
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.sequence
     }
@@ -46,10 +53,12 @@ impl Config {
         }
     }
 
+    /// Load a specific TOML file and resolve referenced palettes relative to that file.
     pub fn load_from(path: &Path) -> io::Result<Self> {
         Self::parse(&fs::read_to_string(path)?, path)
     }
 
+    /// Merge validated settings with defaults and share the nucleotide palette with VCF.
     fn parse(text: &str, path: &Path) -> io::Result<Self> {
         let raw: RawConfig =
             toml::from_str(text).map_err(|e| invalid(format!("{}: {e}", path.display())))?;
@@ -92,35 +101,50 @@ impl Config {
     }
 }
 
+/// TOML sections accepted before theme values and relative palette paths are resolved.
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawConfig {
+    /// Legacy TOML section name for sequence display preferences.
     display: SequenceConfig,
+    /// Optional chrome colours and external content palette path.
     theme: RawTheme,
+    /// VCF-specific display and colour overrides.
     vcf: VcfConfig,
 }
 
+/// Optional theme overrides and the path to a separate sequence content palette.
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawTheme {
+    /// Palette path resolved relative to the configuration file.
     content: Option<PathBuf>,
+    /// Override for the page background.
     background: Option<String>,
+    /// Override for normal text.
     foreground: Option<String>,
+    /// Override for secondary text and hints.
     muted: Option<String>,
+    /// Override for inactive panel borders.
     border: Option<String>,
+    /// Override for focused elements.
     focus: Option<String>,
+    /// Override for selection backgrounds.
     selection: Option<String>,
 }
 
+/// Create a configuration validation error with `InvalidData` kind.
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+/// Configuration defaults, relative palette loading and validation regressions.
 #[cfg(test)]
 mod tests {
     use super::*;
     use ratatui::style::Color;
 
+    /// Verify the bundled configuration loads its palette and shares nucleotide colours with VCF.
     #[test]
     fn sample_config_resolves_its_content_palette() {
         let config =
@@ -145,6 +169,7 @@ mod tests {
         );
     }
 
+    /// Check that omitted options retain defaults while explicit overrides take effect.
     #[test]
     fn partial_config_preserves_defaults() {
         let config = Config::parse(
@@ -158,6 +183,7 @@ mod tests {
         assert_eq!(config.vcf.show_ad_bars, VcfConfig::default().show_ad_bars);
     }
 
+    /// Check legacy palette paths remain relative to the config and supply both modules.
     #[test]
     fn legacy_content_palette_is_shared_with_vcf_and_keeps_relative_paths() {
         let directory = tempfile::tempdir().unwrap();
@@ -202,6 +228,7 @@ mod tests {
         }
     }
 
+    /// Reject misspelled keys, cross-module settings and invalid colour values.
     #[test]
     fn vcf_settings_do_not_accept_unknown_or_sequence_fields() {
         for text in [
@@ -220,6 +247,7 @@ mod tests {
         }
     }
 
+    /// Report malformed settings and missing palette files instead of silently using defaults.
     #[test]
     fn invalid_config_and_missing_referenced_palette_are_reported() {
         assert!(

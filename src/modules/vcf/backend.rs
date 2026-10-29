@@ -10,35 +10,57 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Throttle scan-progress snapshots; explicit view or cancel requests can publish immediately.
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(100);
 
+/// One shared dataset and any nonpersistent failure that stopped its scan.
 struct Slot {
+    /// The source/cache pair shared by tabs with the same canonical owner.
     dataset: Dataset,
+    /// A storage or source failure that stops work for this open dataset.
     failure: Option<String>,
 }
 
+/// An outstanding genomic-position search tied to a tab and request token.
 struct Locate {
+    /// Tab that initiated the lookup.
     file: usize,
+    /// Lookup generation echoed in success and failure updates.
     token: u64,
+    /// Exact contig identifier to search.
     contig: String,
+    /// Requested genomic coordinate in VCF POS units.
     position: u64,
 }
 
+/// Own shared VCF datasets and advance work for the current viewport.
 pub(crate) struct Backend {
+    /// Canonical dataset ownership and per-tab open state.
     files: SessionFiles,
+    /// Parent directory for VCF source caches.
     cache: PathBuf,
+    /// Lazily opened datasets stored at their canonical owner indices.
     slots: Vec<Option<Slot>>,
+    /// Per-tab background indexing pause flags.
     paused: Vec<bool>,
+    /// Most recent viewport to serve.
     view: Option<ViewRequest>,
+    /// Outstanding position lookup, if any.
     locate: Option<Locate>,
+    /// Whether navigation may scan enough records to fill the requested viewport.
     foreground_read: bool,
+    /// Whether the current snapshot needs to be published.
     dirty: bool,
+    /// Whether another scan step can make progress without waiting for a request.
     working: bool,
+    /// Timestamp used to throttle viewport snapshots.
     last_publish: Instant,
+    /// Channel carrying backend responses to the session.
     updates: mpsc::Sender<Update>,
 }
 
 impl Backend {
+    /// Create empty dataset slots and per-tab pause state without opening sources.
     pub(crate) fn new(files: SessionFiles, cache: PathBuf, updates: mpsc::Sender<Update>) -> Self {
         let count = files.len();
         Self {
@@ -56,6 +78,8 @@ impl Backend {
         }
     }
 
+    /// Open the shared dataset on demand and schedule a fresh viewport snapshot.
+    /// A changed position may read the required prefix even while background scanning is paused.
     fn set_view(&mut self, next: ViewRequest) {
         if !self.files.is_open(next.file) {
             return;
@@ -100,10 +124,12 @@ impl Backend {
         self.last_publish = Instant::now() - PUBLISH_INTERVAL;
     }
 
+    /// Send a status or I/O error message to the specified tab.
     fn message(&self, file: usize, text: String) {
         let _ = self.updates.send(Update::Message { file, text });
     }
 
+    /// Apply one navigation, pause or close request; return false on shutdown.
     fn request(&mut self, request: Request) -> bool {
         match request {
             Request::Quit => return false,
@@ -162,6 +188,8 @@ impl Backend {
         true
     }
 
+    /// Run one bounded scan step, resolve a pending position search and publish due updates.
+    /// Return false if the view-update receiver has disconnected.
     fn advance(&mut self) -> bool {
         self.working = false;
         let Some(view) = self.view.as_ref() else {
@@ -260,6 +288,7 @@ impl Backend {
     }
 }
 
+/// Collect bounded table rows and one raw selected record for the request.
 fn snapshot(slot: &mut Slot, request: ViewRequest, paused: bool) -> io::Result<Snapshot> {
     let mut progress = slot.dataset.progress();
     if let Some(error) = &slot.failure {
@@ -285,6 +314,7 @@ fn snapshot(slot: &mut Slot, request: ViewRequest, paused: bool) -> io::Result<S
 impl Driver for Backend {
     type Request = Request;
 
+    /// Poll immediately while scanning, wait for a due snapshot, or sleep while idle.
     fn timeout(&self) -> Duration {
         if self.working {
             Duration::ZERO
@@ -295,6 +325,8 @@ impl Driver for Backend {
         }
     }
 
+    /// Coalesce consecutive viewport requests while preserving operation ordering.
+    /// Flush the latest viewport before each pause, locate, close or quit request.
     fn handle_requests(&mut self, incoming: impl Iterator<Item = Request>) -> bool {
         let mut pending = None;
         for request in incoming {
@@ -315,6 +347,7 @@ impl Driver for Backend {
         true
     }
 
+    /// Advance indexing and publication once for the session task runner.
     fn tick(&mut self) -> bool {
         self.advance()
     }

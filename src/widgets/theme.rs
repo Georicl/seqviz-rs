@@ -2,17 +2,25 @@
 use ratatui::style::Color;
 use std::io;
 
+/// Application chrome colours, separate from biological content palettes.
 #[derive(Debug, Clone)]
 pub struct Theme {
+    /// Default page background.
     pub background: Color,
+    /// Normal text colour.
     pub foreground: Color,
+    /// Secondary text and shortcut hint colour.
     pub muted: Color,
+    /// Inactive panel border colour.
     pub border: Color,
+    /// Focused border, label and cursor-related highlight colour.
     pub focus: Color,
+    /// Background colour for selected content and the active tab.
     pub selection: Color,
 }
 
 impl Default for Theme {
+    /// Use the built-in dark background, light foreground and blue focus colours.
     fn default() -> Self {
         Self {
             background: Color::Rgb(24, 27, 35),
@@ -25,6 +33,7 @@ impl Default for Theme {
     }
 }
 
+/// Replace a colour only when an override is present, preserving defaults otherwise.
 pub(crate) fn set_color(target: &mut Color, value: Option<String>, key: &str) -> io::Result<()> {
     if let Some(value) = value {
         *target = parse_color(&value, key)?;
@@ -32,6 +41,7 @@ pub(crate) fn set_color(target: &mut Color, value: Option<String>, key: &str) ->
     Ok(())
 }
 
+/// Parse a terminal colour and include the configuration key in validation errors.
 pub(crate) fn parse_color(text: &str, key: &str) -> io::Result<Color> {
     text.parse::<Color>().map_err(|_| {
         io::Error::new(

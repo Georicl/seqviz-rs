@@ -1,17 +1,24 @@
+//! VCF document interaction tests with a real indexed source and queued application actions.
 use super::*;
 use crate::modules::vcf::data::Dataset;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{Terminal, backend::TestBackend};
 use tempfile::TempDir;
 
+/// A fully indexed temporary VCF connected to a document view without a worker thread.
 struct Fixture {
+    /// Temporary source/cache lifetime guard.
     _directory: TempDir,
+    /// Fully indexed source used to answer view requests synchronously.
     dataset: Dataset,
+    /// Document under test.
     view: VcfView,
+    /// Original first record used to assert lossless copying.
     first: String,
 }
 
 impl Fixture {
+    /// Build a multi-ALT, two-sample source and load its first viewport.
     fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("variants.vcf");
@@ -54,6 +61,7 @@ impl Fixture {
         fixture
     }
 
+    /// Answer the queued viewport request synchronously from the fixture dataset.
     fn refresh(&mut self) {
         self.view.request_view();
         let request = self
@@ -91,10 +99,12 @@ impl Fixture {
             .update(ModuleUpdate::vcf(Update::View(Box::new(snapshot))));
     }
 
+    /// Send an unmodified key press through the document interface.
     fn key(&mut self, code: KeyCode) {
         self.view.key(KeyEvent::new(code, KeyModifiers::NONE));
     }
 
+    /// Extract the queued clipboard payload, operation ID and cancellation flag.
     fn copied(&mut self) -> (String, u64, Arc<AtomicBool>) {
         self.view
             .actions()
@@ -116,6 +126,7 @@ impl Fixture {
     }
 }
 
+/// Verify full raw-record/header copying and explicitly selected header text.
 #[test]
 fn raw_copy_keeps_tabs_and_full_record_and_header_copy_is_a_small_vcf() {
     let mut fixture = Fixture::new();
@@ -183,6 +194,7 @@ fn raw_copy_keeps_tabs_and_full_record_and_header_copy_is_a_small_vcf() {
     assert_eq!(fixture.copied().0, "##fi");
 }
 
+/// Check INFO, sample-row and dragged-text copy payloads preserve their logical content.
 #[test]
 fn detail_copy_uses_fields_sample_headers_and_original_selected_text() {
     let mut fixture = Fixture::new();
@@ -227,6 +239,7 @@ fn detail_copy_uses_fields_sample_headers_and_original_selected_text() {
     assert_eq!(fixture.copied().0, "S1\t0|10");
 }
 
+/// Check Home/End navigation discards dragged selections before copying the newly selected sample.
 #[test]
 fn home_and_end_replace_dragged_text_with_the_new_sample_context() {
     let mut fixture = Fixture::new();
@@ -266,6 +279,7 @@ fn home_and_end_replace_dragged_text_with_the_new_sample_context() {
     }
 }
 
+/// Verify contig ranking and acceptance of only the current position-lookup generation.
 #[test]
 fn picker_prioritizes_exact_contig_and_position_uses_filtered_ordinals() {
     let mut fixture = Fixture::new();
@@ -331,6 +345,7 @@ fn picker_prioritizes_exact_contig_and_position_uses_filtered_ordinals() {
     assert_eq!(fixture.view.message, "No indexed variants for chr1");
 }
 
+/// Check Escape and tab deactivation cancel clipboard operations and reject stale completions.
 #[test]
 fn cancelled_and_inactive_copy_completions_are_rejected() {
     let mut fixture = Fixture::new();
@@ -365,6 +380,7 @@ fn cancelled_and_inactive_copy_completions_are_rejected() {
     assert_ne!(fixture.view.message, "stale completion");
 }
 
+/// Render the document and contig picker down to a one-cell terminal without panics.
 #[test]
 fn terminal_renders_details_and_picker_at_narrow_sizes() {
     let mut fixture = Fixture::new();
@@ -396,6 +412,7 @@ fn terminal_renders_details_and_picker_at_narrow_sizes() {
     }
 }
 
+/// Check Unicode/TAB clipping and pointer selection map to the same original text.
 #[test]
 fn horizontal_clipping_and_mouse_selection_share_original_display_columns() {
     let mut fixture = Fixture::new();
@@ -441,6 +458,7 @@ fn horizontal_clipping_and_mouse_selection_share_original_display_columns() {
     }
 }
 
+/// Verify resize preserves the selected sample and returns focus when details are hidden.
 #[test]
 fn resizing_keeps_current_sample_visible_and_hidden_details_cannot_take_focus() {
     let mut fixture = Fixture::new();
@@ -481,6 +499,7 @@ fn resizing_keeps_current_sample_visible_and_hidden_details_cannot_take_focus() 
     assert_eq!(fixture.view.focus, Focus::Table);
 }
 
+/// Check missing INFO, samples and records produce status text without empty clipboard jobs.
 #[test]
 fn absent_detail_context_never_submits_an_empty_clipboard_request() {
     let mut fixture = Fixture::new();
@@ -525,6 +544,7 @@ fn absent_detail_context_never_submits_an_empty_clipboard_request() {
     );
 }
 
+/// Ensure load errors persist independently of clipboard and pause status messages.
 #[test]
 fn backend_load_failure_is_separate_from_clipboard_and_pause_messages() {
     let mut fixture = Fixture::new();
@@ -549,6 +569,7 @@ fn backend_load_failure_is_separate_from_clipboard_and_pause_messages() {
     assert!(fixture.view.load_error.is_none());
 }
 
+/// Verify resizing retains a lookup token while user navigation and cancellation invalidate it.
 #[test]
 fn resize_preserves_pending_locate_but_navigation_cancel_and_deactivation_end_it() {
     let mut fixture = Fixture::new();

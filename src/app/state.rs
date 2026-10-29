@@ -19,23 +19,38 @@ use std::{
     },
 };
 
+/// A stable file slot with an independent document view, even for alias paths.
 pub(crate) struct Tab {
+    /// Original input path used for display and format probing.
     pub path: PathBuf,
+    /// Whether this stable tab slot has been closed.
     pub closed: bool,
+    /// Independent page state, including for tabs sharing a dataset.
     pub view: Box<dyn DocumentView>,
 }
+/// Owns tab navigation, document views, worker routing and clipboard delivery.
 pub(crate) struct App {
+    /// Stable input slots; closed tabs remain in the vector.
     pub tabs: Vec<Tab>,
+    /// Index of the currently displayed open tab.
     pub active: usize,
+    /// Resolved application and module settings.
     pub config: Config,
+    /// Current terminal regions for drawing and mouse hit testing.
     pub hits: layout::Layout,
+    /// Whether application chrome needs repainting.
     pub redraw: bool,
+    /// Whether the terminal loop should exit.
     pub quit: bool,
+    /// Background session shared by all tabs.
     pub worker: Worker,
+    /// Off-thread clipboard preparation and system-copy service.
     clipboard: ClipboardService,
+    /// Creates loading and domain pages with shared preferences and operation IDs.
     factory: registry::ViewFactory,
 }
 impl App {
+    /// Create loading views in input order and share theme settings and operation IDs.
     pub fn new(paths: Vec<PathBuf>, config: Config, worker: Worker) -> Self {
         let clock = Arc::new(AtomicU64::new(0));
         let factory = registry::ViewFactory::new(
@@ -65,12 +80,15 @@ impl App {
             factory,
         }
     }
+    /// Borrow the active tab's document interface.
     pub fn view(&self) -> &dyn DocumentView {
         self.tabs[self.active].view.as_ref()
     }
+    /// Mutably borrow the active tab's document interface.
     pub fn view_mut(&mut self) -> &mut dyn DocumentView {
         self.tabs[self.active].view.as_mut()
     }
+    /// Return open tab IDs in input order without renumbering closed slots.
     pub fn open_tabs(&self) -> Vec<usize> {
         self.tabs
             .iter()
@@ -78,6 +96,7 @@ impl App {
             .filter_map(|(i, t)| (!t.closed).then_some(i))
             .collect()
     }
+    /// Recalculate application regions and prepare the active page when it fits.
     pub fn prepare_frame(&mut self, area: Rect) {
         let next = layout::calculate(area);
         if self.hits.area != area {
@@ -88,6 +107,7 @@ impl App {
             self.view_mut().prepare(next.body);
         }
     }
+    /// Drain active-page actions into the worker, cancellation flag and clipboard queue.
     pub fn flush_actions(&mut self) {
         let actions = self.view_mut().actions();
         for action in actions {
@@ -116,6 +136,7 @@ impl App {
             }
         }
     }
+    /// Route pending worker replies and accept clipboard results only for the current operation.
     pub fn receive(&mut self) {
         while let Some(update) = self.worker.try_update() {
             let Some(file) = update.file() else {
@@ -161,6 +182,7 @@ impl App {
         }
         self.flush_actions();
     }
+    /// Deactivate the old page, flush its actions and activate a valid open destination.
     pub fn switch_tab(&mut self, next: usize) {
         if next == self.active || next >= self.tabs.len() || self.tabs[next].closed {
             return;
@@ -171,6 +193,7 @@ impl App {
         self.view_mut().activate();
         self.redraw = true;
     }
+    /// Move to the next open tab in the chosen direction, wrapping at either end.
     pub fn cycle_tab(&mut self, backwards: bool) {
         let n = self.tabs.len();
         for step in 1..=n {
@@ -185,6 +208,7 @@ impl App {
             }
         }
     }
+    /// Cancel and close the active tab, then select another tab or end the session.
     pub fn close_tab(&mut self) {
         self.view_mut().deactivate();
         self.flush_actions();
@@ -196,25 +220,31 @@ impl App {
             self.cycle_tab(false);
         }
     }
+    /// Advance active-page interaction timers and dispatch resulting actions.
     pub fn tick(&mut self) {
         self.view_mut().tick();
         self.flush_actions();
     }
+    /// Ask the active page for a fresh snapshot and dispatch its request.
     pub fn request_view(&mut self) {
         self.view_mut().request_view();
         self.flush_actions();
     }
+    /// Report whether either application chrome or the active page changed.
     pub fn needs_redraw(&self) -> bool {
         self.redraw || self.view().needs_redraw()
     }
+    /// Clear application and active-page redraw flags after a completed frame.
     pub fn did_draw(&mut self) {
         self.redraw = false;
         self.view_mut().did_draw();
     }
+    /// Invalidate both application chrome and the active page after terminal resizing.
     pub fn resized(&mut self) {
         self.redraw = true;
         self.view_mut().resized();
     }
+    /// Pair open tab IDs with lossy UTF-8 file names for the tab bar.
     pub fn labels(&self) -> Vec<(usize, String)> {
         self.open_tabs()
             .into_iter()
@@ -228,6 +258,7 @@ impl App {
             })
             .collect()
     }
+    /// Map terminal coordinates to the visible tab ID using the rendering geometry.
     pub fn tab_hit(&self, x: u16, y: u16) -> Option<usize> {
         widgets::tabs::hit(
             &widgets::tabs::layout(self.hits.tabs, &self.open_tabs(), self.active),
@@ -237,6 +268,7 @@ impl App {
     }
 }
 impl Drop for App {
+    /// Deactivate every page so pending operations are cancelled before services are dropped.
     fn drop(&mut self) {
         for tab in &mut self.tabs {
             tab.view.deactivate();

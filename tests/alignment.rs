@@ -15,12 +15,14 @@ use std::{
 
 use seqviz::data::{Dataset, Format, RecordMeta, SeqType};
 
+/// Resolve a checked-in alignment fixture relative to the package root.
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("test")
         .join(name)
 }
 
+/// Index a fixture with bounded steps and assert error-free completion.
 fn scan(path: &Path, cache: &Path, budget: usize) -> Dataset {
     let mut dataset = Dataset::open(path, cache).unwrap();
     for _ in 0..20_000 {
@@ -39,6 +41,7 @@ fn scan(path: &Path, cache: &Path, budget: usize) -> Dataset {
     panic!("{} did not finish indexing", path.display());
 }
 
+/// Find a named alignment metadata field, failing with the record context if absent.
 fn field<'a>(record: &'a RecordMeta, key: &str) -> &'a str {
     record
         .fields
@@ -48,10 +51,12 @@ fn field<'a>(record: &'a RecordMeta, key: &str) -> &'a str {
         .unwrap_or_else(|| panic!("{} is missing {key}: {:?}", record.name, record.fields))
 }
 
+/// Compare floating-point statistics within an absolute tolerance of 1e-10.
 fn close(left: f64, right: f64) {
     assert!((left - right).abs() < 1e-10, "{left} != {right}");
 }
 
+/// Read non-header fixture lines as tab-separated expected SAM columns.
 fn sam_records() -> Vec<Vec<&'static str>> {
     include_str!("../test/alignments.sam")
         .lines()
@@ -60,6 +65,7 @@ fn sam_records() -> Vec<Vec<&'static str>> {
         .collect()
 }
 
+/// Compare SAM/BAM records, stored orientation, optional sequence/quality and duplicate names.
 #[test]
 fn sam_and_bam_preserve_record_identity_alignment_fields_and_saved_orientation() {
     let expected = sam_records();
@@ -166,6 +172,7 @@ fn sam_and_bam_preserve_record_identity_alignment_fields_and_saved_orientation()
     }
 }
 
+/// Count all alignments while computing length statistics only from records containing sequence.
 #[test]
 fn alignment_statistics_include_duplicate_alignments_and_exclude_missing_seq_from_lengths() {
     let expected = sam_records();
@@ -207,6 +214,7 @@ fn alignment_statistics_include_duplicate_alignments_and_exclude_missing_seq_fro
     }
 }
 
+/// Reject SAM/BAM copy requests through the public dataset API.
 #[test]
 fn alignment_copy_is_rejected_at_the_dataset_boundary() {
     for name in ["alignments.sam", "alignments.bam"] {
@@ -218,6 +226,7 @@ fn alignment_copy_is_rejected_at_the_dataset_boundary() {
     }
 }
 
+/// Check BAM auxiliary fields retain their scalar/array types and decoded values.
 #[test]
 fn bam_optional_fields_cover_scalar_integer_float_string_hex_and_numeric_arrays() {
     let cache = tempfile::tempdir().unwrap();
@@ -242,14 +251,17 @@ fn bam_optional_fields_cover_scalar_integer_float_string_hex_and_numeric_arrays(
     assert_eq!(field(&dataset.record(2).unwrap().unwrap(), "AS"), "i:-10");
 }
 
+/// Generate a repeatable ACGTN sequence of the requested byte length.
 fn generated_sequence(length: usize) -> Vec<u8> {
     b"ACGTN".iter().copied().cycle().take(length).collect()
 }
 
+/// Cycle through all printable Phred+33 quality characters for a fixture.
 fn generated_quality(length: usize) -> Vec<u8> {
     (0..length).map(|i| 33 + (i % 94) as u8).collect()
 }
 
+/// Build a single reverse-strand SAM alignment with deterministic sequence and qualities.
 fn generated_sam(name: &str, length: usize, cigar: &str) -> String {
     format!(
         "@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:chr1\tLN:1000000\n{name}\t16\tchr1\t31\t60\t{cigar}\t*\t0\t0\t{}\t{}\n",
@@ -258,6 +270,7 @@ fn generated_sam(name: &str, length: usize, cigar: &str) -> String {
     )
 }
 
+/// Compare long SAM/BAM windows across index and BGZF boundaries before and after reopening.
 #[test]
 fn long_sequence_ranges_cross_bgzf_and_index_spans_and_survive_reopening() {
     let length = 150_003;
@@ -302,6 +315,7 @@ fn long_sequence_ranges_cross_bgzf_and_index_spans_and_survive_reopening() {
     }
 }
 
+/// Recover the long CIGAR from the CG tag while preserving sequence and quality ranges.
 #[test]
 fn bam_long_cigar_uses_cg_array_instead_of_the_placeholder_cigar() {
     let cache = tempfile::tempdir().unwrap();
@@ -314,6 +328,7 @@ fn bam_long_cigar_uses_cg_array_instead_of_the_placeholder_cigar() {
     assert_eq!(range.quality, generated_quality(65_536)[65_520..]);
 }
 
+/// Resume a partially indexed BAM record without duplicating or shortening it.
 #[test]
 fn interrupted_bam_index_resumes_without_duplicate_or_truncated_record() {
     let cache = tempfile::tempdir().unwrap();
@@ -337,6 +352,7 @@ fn interrupted_bam_index_resumes_without_duplicate_or_truncated_record() {
     assert_eq!(window.quality, generated_quality(150_003)[7_003..84_780]);
 }
 
+/// Preserve missing SAM fields and aggregate statistics when reading through gzip.
 #[test]
 fn gzip_sam_retains_missing_values_and_sam_statistics() {
     use std::io::Write;
@@ -368,6 +384,7 @@ fn gzip_sam_retains_missing_values_and_sam_statistics() {
     assert_eq!(compressed.stats().unwrap().n50, None);
 }
 
+/// Treat runs of `*` as quality data when the field contains more than the missing-value marker.
 #[test]
 fn sam_star_quality_characters_split_at_chunk_boundaries_are_not_missing_quality() {
     let files = tempfile::tempdir().unwrap();

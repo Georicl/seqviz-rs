@@ -1,3 +1,4 @@
+//! Render an indexed sequence window with residue colours, selection and quality rows.
 use crate::modules::sequence::{data::SeqType, palette::ContentPalette, protocol::Snapshot};
 use crate::widgets::theme::Theme;
 use ratatui::{
@@ -9,21 +10,35 @@ use ratatui::{
 };
 /// Borrowed data, geometry and UI state needed to draw a sequence window.
 pub(crate) struct Props<'a> {
+    /// Loaded record metadata and sequence bytes for the current viewport generation.
     pub snapshot: &'a Snapshot,
+    /// Shared colours for text, selection and focus.
     pub theme: &'a Theme,
+    /// Residue and Phred-score colours for sequence characters.
     pub palette: &'a ContentPalette,
+    /// Sequence rectangle, including its coordinate gutter.
     pub area: Rect,
+    /// Number of base rows that fit after accounting for quality rows.
     pub sequence_rows: usize,
+    /// Maximum sequence characters in each base row.
     pub bases_per_line: usize,
+    /// Terminal columns reserved for the one-based coordinate label.
     pub gutter: u16,
+    /// Terminal rows per base row: one normally, two with aligned quality characters.
     pub stride: u16,
+    /// Requested zero-based record ID, checked against the loaded snapshot.
     pub record: u64,
+    /// Requested zero-based sequence offset, checked against the loaded window.
     pub start: u64,
+    /// Zero-based sequence coordinate of the keyboard cursor.
     pub cursor: u64,
+    /// Inclusive zero-based endpoints; dragging may reverse their order.
     pub selection: Option<(u64, u64)>,
+    /// Whether to emphasise the cursor in the active sequence pane.
     pub focused: bool,
 }
 
+/// Draw only a window matching the requested record/start, using one-based labels for zero-based data.
 pub(crate) fn draw(frame: &mut Frame, props: Props<'_>) {
     let snapshot = props.snapshot;
     let Some(meta) = &snapshot.record else {

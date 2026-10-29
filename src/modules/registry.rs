@@ -12,25 +12,33 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
+/// Stable identity and supported format labels for a built-in document module.
 #[derive(Clone, Copy)]
 pub struct ModuleDescriptor {
+    /// Typed routing identity used by the session and page factory.
     pub kind: ModuleKind,
+    /// Stable machine-readable module name.
     pub id: &'static str,
+    /// Human-readable module label.
     pub name: &'static str,
+    /// Supported biological file formats, independent of compression.
     pub formats: &'static [&'static str],
 }
+/// Descriptor for FASTA, FASTQ, SAM and BAM sequence browsing.
 pub const SEQUENCE: ModuleDescriptor = ModuleDescriptor {
     kind: ModuleKind::Sequence,
     id: "sequence",
     name: "Sequence",
     formats: &["FASTA", "FASTQ", "SAM", "BAM"],
 };
+/// Descriptor for the VCF variant browser.
 pub const VCF: ModuleDescriptor = ModuleDescriptor {
     kind: ModuleKind::Vcf,
     id: "vcf",
     name: "VCF",
     formats: &["VCF"],
 };
+/// Return the built-in module descriptors in registration order.
 pub fn modules() -> &'static [ModuleDescriptor] {
     &[SEQUENCE, VCF]
 }
@@ -53,13 +61,19 @@ pub fn probe(prefix: &[u8], path: &Path) -> Option<&'static ModuleDescriptor> {
 
 /// Built-in page factories share only module-owned UI preferences, not document data.
 pub(crate) struct ViewFactory {
+    /// Application chrome colours cloned into each page.
     theme: Theme,
+    /// Initial sequence display and content-colour preferences.
     settings: SequenceConfig,
+    /// Initial VCF display preferences.
     vcf: VcfConfig,
+    /// Shared monotonic operation-ID source across document pages.
     clock: Arc<AtomicU64>,
+    /// Sequence focus and quality-visibility preferences shared across sequence tabs.
     shared: std::rc::Rc<std::cell::RefCell<super::sequence::view::SharedInteraction>>,
 }
 impl ViewFactory {
+    /// Share theme, module preferences, operation IDs and sequence interaction preferences.
     pub(crate) fn new(
         theme: Theme,
         settings: SequenceConfig,
@@ -80,6 +94,7 @@ impl ViewFactory {
             shared,
         }
     }
+    /// Create a placeholder page that requests worker-side format detection.
     pub(crate) fn loading(&self, path: PathBuf, file: usize) -> Box<dyn DocumentView> {
         Box::new(LoadingView::new(path, file, self.theme.clone()))
     }

@@ -1,3 +1,4 @@
+//! VCF parser, resumable index and background request integration tests.
 use super::{
     backend::Backend,
     data::Dataset,
@@ -19,14 +20,18 @@ use std::{
 };
 use tempfile::TempDir;
 
+/// Minimal two-contig VCF header reused by parser and dataset fixtures.
 const HEADER: &str = "##fileformat=VCFv4.3\n##contig=<ID=chr1,length=10000>\n##contig=<ID=chr2,length=10000>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
 
+/// Parse a fixture header and fail immediately if its syntax is invalid.
 fn header(raw: &str) -> VcfHeader {
     read_header(&mut Cursor::new(raw)).unwrap().0
 }
+/// Build a minimal passing SNV record for a given contig and VCF position.
 fn record(chrom: &str, pos: u64) -> String {
     format!("{chrom}\t{pos}\trs{pos}\tA\tT\t40\tPASS\tDP=12\n")
 }
+/// Write source bytes into a temporary directory and return source/cache paths.
 fn fixture(bytes: &[u8]) -> (TempDir, PathBuf, PathBuf) {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("input.vcf");
@@ -34,6 +39,7 @@ fn fixture(bytes: &[u8]) -> (TempDir, PathBuf, PathBuf) {
     fs::write(&path, bytes).unwrap();
     (directory, path, cache)
 }
+/// Advance the index until completion, asserting no persistent input error occurs.
 fn finish(dataset: &mut Dataset) {
     for _ in 0..10000 {
         let progress = dataset.step(64 * 1024).unwrap();
@@ -44,6 +50,7 @@ fn finish(dataset: &mut Dataset) {
     }
     panic!("Indexing did not finish");
 }
+/// Find the source-specific SQLite database under the fixture cache.
 fn database(cache: &Path) -> PathBuf {
     fs::read_dir(cache.join("vcf"))
         .unwrap()
@@ -53,11 +60,13 @@ fn database(cache: &Path) -> PathBuf {
         .path()
         .join("vcf.sqlite")
 }
+/// Compress fixture bytes into an ordinary gzip stream.
 fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(bytes).unwrap();
     encoder.finish().unwrap()
 }
+/// Encode fixture bytes as BGZF blocks with checksums and decoded lengths.
 fn bgzf(bytes: &[u8]) -> Vec<u8> {
     let mut output = Vec::new();
     for chunk in bytes.chunks(32000) {
@@ -75,6 +84,7 @@ fn bgzf(bytes: &[u8]) -> Vec<u8> {
     output
 }
 
+/// Check CRLF source offsets and original header/record text survive parsing and indexing.
 #[test]
 fn preserves_crlf_raw_header_record_and_copy() {
     let text = format!(
@@ -96,6 +106,7 @@ fn preserves_crlf_raw_header_record_and_copy() {
     assert_eq!(dataset.progress().scanned_bytes, text.len() as u64);
 }
 
+/// Verify a header ending at EOF retains its exact byte length and indexes as empty.
 #[test]
 fn header_without_final_newline_keeps_physical_offset() {
     let text = HEADER.trim_end();
@@ -110,6 +121,7 @@ fn header_without_final_newline_keeps_physical_offset() {
     assert_eq!(dataset.total(None).unwrap(), 0);
 }
 
+/// Check supported VCF versions and local-allele FORMAT metadata while rejecting malformed declarations.
 #[test]
 fn versions_and_local_allele_metadata_are_preserved() {
     for minor in 0..=5 {
@@ -160,6 +172,7 @@ fn versions_and_local_allele_metadata_are_preserved() {
     }
 }
 
+/// Verify independent ALT classifications, optional length changes and absent implicit graph annotations.
 #[test]
 fn multi_alt_structural_variants_have_independent_kinds_and_no_graph_assumption() {
     let parsed = header(HEADER);
@@ -195,6 +208,7 @@ fn multi_alt_structural_variants_have_independent_kinds_and_no_graph_assumption(
     );
 }
 
+/// Check lazy sample pages preserve genotype text and pad omitted FORMAT values with dots.
 #[test]
 fn sample_pages_preserve_polyploid_phased_missing_and_omitted_values() {
     let raw = HEADER.trim_end().to_owned() + "\tFORMAT\tS1\tS2\tS3\tS4\n";
@@ -219,6 +233,7 @@ fn sample_pages_preserve_polyploid_phased_missing_and_omitted_values() {
     assert!(record.raw.ends_with("0/0:9"));
 }
 
+/// Reject records whose sample columns disagree with the header or FORMAT cardinality.
 #[test]
 fn rejects_column_mismatches_and_extra_format_values() {
     let parsed = header(&(HEADER.trim_end().to_owned() + "\tFORMAT\tS1\n"));
@@ -237,6 +252,7 @@ fn rejects_column_mismatches_and_extra_format_values() {
     assert_eq!(manual.sample_values(0, 1)[0].values, ["0/1", "42"]);
 }
 
+/// Verify an interrupted long record resumes from the last fully indexed source line.
 #[test]
 fn partial_large_line_budget_reopens_from_complete_record_boundary() {
     let first = record("chr1", 1);
@@ -267,6 +283,7 @@ fn partial_large_line_budget_reopens_from_complete_record_boundary() {
     assert_eq!(resumed.entry(None, 2).unwrap().unwrap().record.pos, 3);
 }
 
+/// Check random record reads preserve a partial scan line and allow indexing to finish.
 #[test]
 fn selected_record_reads_do_not_disturb_pending_scan_bytes() {
     let text = format!(
@@ -296,6 +313,7 @@ fn selected_record_reads_do_not_disturb_pending_scan_bytes() {
     );
 }
 
+/// Verify compressed sources resume partial indexes and reuse complete caches without duplicate records.
 #[test]
 fn ordinary_gzip_and_bgzf_resume_and_reuse_complete_cache() {
     let mut text = HEADER.to_owned();
@@ -346,6 +364,7 @@ fn ordinary_gzip_and_bgzf_resume_and_reuse_complete_cache() {
     }
 }
 
+/// Check mixed per-ALT classifications persist in table summaries after reopening.
 #[test]
 fn mixed_alt_types_remain_mixed_in_persisted_table_summaries() {
     let text =
@@ -369,6 +388,7 @@ fn mixed_alt_types_remain_mixed_in_persisted_table_summaries() {
     );
 }
 
+/// Verify leading/trailing-dot breakends keep their classification in records and persisted summaries.
 #[test]
 fn single_breakends_remain_breakends_in_records_and_cached_summaries() {
     let mut text = HEADER.to_owned();
@@ -414,6 +434,7 @@ fn single_breakends_remain_breakends_in_records_and_cached_summaries() {
     );
 }
 
+/// Check bounded index fields, filtered ordinals and position lookup on unsorted records.
 #[test]
 fn index_stores_short_fixed_fields_and_contig_ordinals() {
     let text = format!(
@@ -455,6 +476,7 @@ fn index_stores_short_fixed_fields_and_contig_ordinals() {
     );
 }
 
+/// Verify malformed records preserve the indexed prefix and report physical line/decoded-byte context.
 #[test]
 fn errors_keep_valid_prefix_and_report_actual_line_and_offset() {
     let first = record("chr1", 1);
@@ -480,6 +502,7 @@ fn errors_keep_valid_prefix_and_report_actual_line_and_offset() {
     assert!(reopened.progress().error.is_some());
 }
 
+/// Ensure source modification invalidates both table and selected-record reads.
 #[test]
 fn source_changes_are_rejected_before_using_stale_index() {
     let text = format!("{HEADER}{}", record("chr1", 1));
@@ -503,6 +526,7 @@ fn source_changes_are_rejected_before_using_stale_index() {
     );
 }
 
+/// Build a two-row unfiltered viewport request beginning at the selected ordinal.
 fn view(file: usize, token: u64, selected: u64) -> Request {
     Request::View(ViewRequest {
         file,
@@ -514,6 +538,7 @@ fn view(file: usize, token: u64, selected: u64) -> Request {
     })
 }
 
+/// Check adjacent views coalesce without moving refreshes across pause requests.
 #[test]
 fn backend_coalesces_views_and_preserves_pause_operation_barrier() {
     let mut text = HEADER.to_owned();
@@ -574,6 +599,7 @@ fn backend_coalesces_views_and_preserves_pause_operation_barrier() {
     assert!(snapshot.paused && snapshot.progress.records > 0 && !snapshot.progress.complete);
 }
 
+/// Verify lookup results carry filtered ordinals and preserve their file/token identity.
 #[test]
 fn backend_locates_contig_ordinal_with_request_identity() {
     let text = format!(
@@ -624,6 +650,7 @@ fn backend_locates_contig_ordinal_with_request_identity() {
     assert!(!backend.handle_requests(std::iter::once(Request::Quit)));
 }
 
+/// Check failed navigation reports the underlying parse or cache-write error.
 #[test]
 fn backend_locate_preserves_scan_and_cache_errors() {
     for cache_failure in [false, true] {
@@ -677,6 +704,7 @@ fn backend_locate_preserves_scan_and_cache_errors() {
     }
 }
 
+/// Verify missing-contig and oversized-position failures retain their lookup identity.
 #[test]
 fn backend_locate_failures_keep_file_and_request_token() {
     let (_directory, path, cache) = fixture(HEADER.as_bytes());

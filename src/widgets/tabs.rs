@@ -7,6 +7,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
+/// Place up to 20-column tab cells after the logo, keeping the active tab visible.
 pub fn layout(area: Rect, open: &[usize], active: usize) -> Vec<(usize, Rect)> {
     let active_index = open.iter().position(|id| *id == active).unwrap_or(0);
     let visible = (area.width.saturating_sub(4) / 20).max(1) as usize;
@@ -23,6 +24,7 @@ pub fn layout(area: Rect, open: &[usize], active: usize) -> Vec<(usize, Rect)> {
         .collect()
 }
 
+/// Render file labels with stable one-based tab numbers and an active-tab highlight.
 pub fn draw(
     frame: &mut Frame,
     labels: &[(usize, String)],
@@ -60,6 +62,7 @@ pub fn draw(
     }
 }
 
+/// Return the tab whose visible rectangle contains the given terminal cell.
 pub fn hit(layout: &[(usize, Rect)], x: u16, y: u16) -> Option<usize> {
     layout
         .iter()

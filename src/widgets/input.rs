@@ -9,6 +9,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+/// Draw one input line and position the cursor using Unicode display width.
 pub fn draw(frame: &mut Frame, area: Rect, label: &str, text: &str, theme: &Theme) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -23,6 +24,7 @@ pub fn draw(frame: &mut Frame, area: Rect, label: &str, text: &str, theme: &Them
     frame.set_cursor_position((area.x + cursor, area.y));
 }
 
+/// Append ordinary characters or remove the last character on Backspace.
 pub fn edit(text: &mut String, key: KeyEvent) {
     match key.code {
         KeyCode::Backspace => {

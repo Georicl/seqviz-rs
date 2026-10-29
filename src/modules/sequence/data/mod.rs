@@ -2,15 +2,23 @@
 //!
 //! Coordinates are zero based. Source handles logical-byte I/O, scanners decode
 //! format structure, and RecordIndex owns persistence and record aggregates.
+/// Incremental binary alignment decoding after source decompression.
 mod bam;
+/// Format recognition and sequence-alphabet classification.
 mod classify;
+/// Persistent records, source spans and aggregate statistics.
 mod index;
+/// Public record, progress and statistics values.
 mod model;
+/// Storage-independent scanner tests across format and chunk boundaries.
 #[cfg(test)]
 mod parser_tests;
+/// Logical-byte parser input and the record-sink contract.
 mod scan;
+/// Dataset integration tests for indexes, range reads and source changes.
 #[cfg(test)]
 mod tests;
+/// Incremental FASTA, FASTQ and SAM parsing.
 mod text;
 
 use crate::core::{cache, source::Source};
@@ -35,32 +43,52 @@ use std::{
     time::UNIX_EPOCH,
 };
 
+/// Maximum source fragment and coalesced text-span size in bytes.
 const CHUNK: usize = 64 * 1024;
+/// Record-cache schema version included in the cache identity.
 const SCHEMA: u64 = 1;
+/// BAM four-bit nucleotide codes in nibble-value order.
 const BAM_BASES: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
+/// Construct an invalid-data error for malformed input or a stale index.
 pub(super) fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+/// Active incremental parser, or a terminal state after completion or fatal input failure.
 enum Scanner {
+    /// Stateful parser for FASTA, FASTQ or SAM.
     Text(text::TextScanner),
+    /// Stateful parser for decoded BAM bytes.
     Bam(bam::BamScanner),
+    /// Scanning has completed or stopped on a fatal input error.
     Done,
 }
 
+/// A sequence source with a persistent record index and an independently restorable scan cursor.
 pub struct Dataset {
+    /// Canonical source path used for identity checks.
     source_path: PathBuf,
+    /// File metadata fingerprint captured when the source opened.
     source_identity: [u64; 7],
+    /// Buffered logical-byte source shared by scanning and interval reads.
     reader: BufReader<Source>,
+    /// Persistent records, source spans and scan progress.
     index: RecordIndex,
+    /// Format-specific parser state for the next bounded scan step.
     scanner: Scanner,
+    /// Logical-byte scan cursor restored after interval reads and copying.
     position: u64,
+    /// Held for the dataset lifetime to reserve its cache directory.
     _cache_lock: File,
+    /// Temporary directory to remove when another handle owns the reusable cache.
     private_cache: Option<PathBuf>,
 }
 
 impl Dataset {
+    /// Open the source and reuse its index, resuming incomplete scans at a record boundary.
+    /// Canonical path, file identity and schema version select the cache; contending writers
+    /// receive a private cache. `.faa` and `.pep` inputs are classified as protein.
     pub fn open(path: &Path, cache_dir: &Path) -> io::Result<Self> {
         fs::create_dir_all(cache_dir)?;
         let canonical = fs::canonicalize(path)?;
@@ -116,12 +144,15 @@ impl Dataset {
         Ok(dataset)
     }
 
+    /// Return the format detected from decoded input bytes.
     pub fn format(&self) -> Format {
         self.index.format
     }
+    /// Return the source compression label used by the interface.
     pub fn compression(&self) -> &str {
         self.reader.get_ref().compression()
     }
+    /// Clone the most recently committed scan progress.
     pub fn progress(&self) -> Progress {
         self.index.progress.clone()
     }
@@ -155,10 +186,12 @@ impl Dataset {
         Ok(self.progress())
     }
 
+    /// Return at most `limit` summaries with zero-based IDs at or beyond `offset`.
     pub fn records(&self, offset: u64, limit: usize) -> io::Result<Vec<RecordSummary>> {
         self.check_source()?;
         self.index.records(offset, limit)
     }
+    /// Read indexed metadata for a zero-based record ID, or `None` if absent.
     pub fn record(&self, id: u64) -> io::Result<Option<RecordMeta>> {
         self.check_source()?;
         self.index.record(id)
@@ -168,6 +201,7 @@ impl Dataset {
         self.check_source()?;
         self.index.find_name(query, after)
     }
+    /// Search names from `after` inclusively, interrupting SQLite when cancellation is set.
     pub fn find_name_cancellable(
         &self,
         query: &str,
@@ -177,12 +211,14 @@ impl Dataset {
         self.check_source()?;
         self.index.find_name_cancellable(query, after, cancel)
     }
+    /// Aggregate completed sequence-bearing records and verify the source before and after the query.
     pub fn stats(&self) -> io::Result<Stats> {
         self.check_source()?;
         let stats = self.index.stats()?;
         self.check_source()?;
         Ok(stats)
     }
+    /// Compute aggregate statistics with SQLite cancellation and source-identity checks.
     pub fn stats_cancellable(&self, cancel: Arc<AtomicBool>) -> io::Result<Stats> {
         self.check_source()?;
         let stats = self.index.stats_cancellable(cancel)?;
@@ -208,6 +244,7 @@ impl Dataset {
         result.and_then(|value| restored.map(|_| value))
     }
 
+    /// Decode indexed spans for one sequence or quality interval without restoring the scan cursor.
     fn range_kind(
         &mut self,
         id: u64,
@@ -256,6 +293,8 @@ impl Dataset {
         result.and_then(|value| restored.map(|_| value))
     }
 
+    /// Reconstruct a complete FASTA or FASTQ record, checking cancellation between chunks.
+    /// FASTA sequence lines wrap at 60 characters; FASTQ preserves its separator text.
     fn copy_record_inner(&mut self, id: u64, cancel: &AtomicBool) -> io::Result<String> {
         if !self.format().can_copy() {
             return Err(io::Error::new(
@@ -321,6 +360,7 @@ impl Dataset {
         Ok(output)
     }
 
+    /// Reject input that no longer has the file identity captured when the dataset opened.
     fn check_source(&self) -> io::Result<()> {
         let metadata = fs::metadata(&self.source_path).map_err(|error| {
             invalid(format!("Source changed or is no longer available: {error}"))
@@ -335,6 +375,7 @@ impl Dataset {
 }
 
 impl Drop for Dataset {
+    /// Remove the temporary cache allocated when another dataset owns the reusable cache.
     fn drop(&mut self) {
         // Private concurrent-reader caches do not replace the reusable writer index.
         // macOS/Linux permit unlinking these files while their final handles close.

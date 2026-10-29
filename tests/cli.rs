@@ -1,6 +1,9 @@
+//! Command-line help, exit status and redirected-output integration tests.
+
 use std::path::Path;
 use std::process::Command;
 
+/// Run the compiled command with captured output and an isolated cache directory.
 fn run(paths: &[&Path]) -> std::process::Output {
     let cache = tempfile::tempdir().unwrap();
     Command::new(env!("CARGO_BIN_EXE_sq"))
@@ -10,6 +13,7 @@ fn run(paths: &[&Path]) -> std::process::Output {
         .unwrap()
 }
 
+/// Check command help, positional-file usage and the package version printed to stdout.
 #[test]
 fn help_and_version_describe_the_current_cli_contract() {
     let help = Command::new(env!("CARGO_BIN_EXE_sq"))
@@ -36,6 +40,7 @@ fn help_and_version_describe_the_current_cli_contract() {
     );
 }
 
+/// Preserve input order and full FASTA records when multiple paths are redirected.
 #[test]
 fn prints_all_records_for_each_input_file() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/test.fa");
@@ -48,6 +53,7 @@ fn prints_all_records_for_each_input_file() {
     assert_eq!(stdout, expected.repeat(2));
 }
 
+/// Return a failing exit status and stderr for a missing input without emitting records.
 #[test]
 fn missing_file_returns_failure() {
     let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/missing-header-test.fa");
@@ -59,6 +65,7 @@ fn missing_file_returns_failure() {
     assert!(output.stdout.is_empty());
 }
 
+/// Reject unrelated text with an invalid-data error and empty redirected output.
 #[test]
 fn invalid_fasta_returns_failure() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
@@ -73,6 +80,7 @@ fn invalid_fasta_returns_failure() {
     assert!(output.stdout.is_empty());
 }
 
+/// Keep redirected FASTA headers, whitespace handling and empty records compression-independent.
 #[test]
 fn gzip_and_plain_fasta_use_identical_parsing_rules() {
     use flate2::{Compression, write::GzEncoder};
@@ -95,6 +103,7 @@ fn gzip_and_plain_fasta_use_identical_parsing_rules() {
     assert_eq!(plain_output.stdout, gzip_output.stdout);
 }
 
+/// Require an interactive terminal for FASTQ, SAM, BAM and VCF inputs.
 #[test]
 fn non_fasta_redirects_are_rejected_without_copying_records() {
     let tmp = tempfile::tempdir().unwrap();

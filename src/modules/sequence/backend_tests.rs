@@ -1,19 +1,26 @@
+//! Sequence worker regressions for scheduling, cancellation and alias-tab ownership.
 use super::*;
 use crate::core::tasks::TaskWorker;
 use tempfile::TempDir;
 
+/// Task runner specialised to sequence request and update messages.
 type Worker = TaskWorker<Request, Update>;
 
-// Large fixtures need time to finish in debug builds on shared CI hosts.
+/// Large fixtures need time to finish in debug builds on shared CI hosts.
 const LARGE_FIXTURE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Temporary input files and cache directory kept alive for a backend test.
 struct Fixture {
+    /// Keeps fixture files and generated caches alive for the test.
     _directory: TempDir,
+    /// Source paths supplied to the worker, including any alias tabs added by a test.
     paths: Vec<PathBuf>,
+    /// Fixture-local cache root for indexes and source checkpoints.
     cache: PathBuf,
 }
 
 impl Fixture {
+    /// Write each source into one temporary fixture directory and reserve a separate cache path.
     fn new(contents: &[&[u8]]) -> Self {
         let directory = TempDir::new().unwrap();
         let paths = contents
@@ -33,6 +40,7 @@ impl Fixture {
         }
     }
 
+    /// Start a sequence backend with requests queued before its worker thread begins processing.
     fn start(&self, initial: Vec<Request>) -> Worker {
         let paths = self.paths.clone();
         let cache = self.cache.clone();
@@ -42,6 +50,7 @@ impl Fixture {
     }
 }
 
+/// Build an 80-base viewport request for record zero at a chosen sequence offset.
 fn view(token: u64, file: usize, start: u64) -> Request {
     Request::View(ViewRequest {
         token,
@@ -54,6 +63,7 @@ fn view(token: u64, file: usize, start: u64) -> Request {
     })
 }
 
+/// Wait up to five seconds for a snapshot satisfying the test's acceptance predicate.
 fn wait_view(worker: &Worker, accept: impl Fn(&Snapshot) -> bool) -> Snapshot {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -69,6 +79,7 @@ fn wait_view(worker: &Worker, accept: impl Fn(&Snapshot) -> bool) -> Snapshot {
     }
 }
 
+/// Check that an idle worker publishes no update during a short observation window.
 fn assert_quiet(worker: &Worker) {
     assert!(
         matches!(
@@ -79,6 +90,7 @@ fn assert_quiet(worker: &Worker) {
     );
 }
 
+/// Check adjacent view requests skip opening a superseded missing source.
 #[test]
 fn coalesces_views_before_opening_obsolete_files() {
     let mut fixture = Fixture::new(&[b">first\nAAA\n", b">second\nTTT\n"]);
@@ -99,6 +111,7 @@ fn coalesces_views_before_opening_obsolete_files() {
     assert_quiet(&worker);
 }
 
+/// Check a paused unresolved viewport remains paused until an explicit statistics request.
 #[test]
 fn cancel_pauses_an_unready_view_and_refresh_does_not_restart_it() {
     let mut data = b">long\n".to_vec();
@@ -121,6 +134,7 @@ fn cancel_pauses_an_unready_view_and_refresh_does_not_restart_it() {
     assert_quiet(&worker);
 }
 
+/// Check statistics are opt-in and a completed result does not produce recurring updates.
 #[test]
 fn completed_statistics_are_cached_and_not_published_repeatedly() {
     let fixture = Fixture::new(&[b">a\nACGT\n>b\nAA\n"]);
@@ -138,6 +152,7 @@ fn completed_statistics_are_cached_and_not_published_repeatedly() {
     assert_quiet(&worker);
 }
 
+/// Check stale viewport requests cannot resurrect a closed tab.
 #[test]
 fn closed_tabs_cannot_be_reopened_by_a_stale_view() {
     let fixture = Fixture::new(&[b">closed\nAAA\n", b">open\nCCC\n"]);
@@ -147,10 +162,12 @@ fn closed_tabs_cannot_be_reopened_by_a_stale_view() {
     assert_quiet(&worker);
 }
 
+/// Create a fresh uncancelled flag for one test operation.
 fn action_cancel() -> Arc<AtomicBool> {
     Arc::new(AtomicBool::new(false))
 }
 
+/// Allow viewport traffic while rejecting replies from stale operations.
 fn assert_no_action_updates(worker: &Worker) {
     let deadline = Instant::now() + Duration::from_millis(250);
     while let Ok(update) = worker
@@ -167,6 +184,7 @@ fn assert_no_action_updates(worker: &Worker) {
     }
 }
 
+/// Check copied ranges retain their operation IDs and older operations receive no reply.
 #[test]
 fn copy_results_carry_operation_ids_and_stale_requests_are_ignored() {
     let fixture = Fixture::new(&[b">a\nACGT\n"]);
@@ -203,6 +221,7 @@ fn copy_results_carry_operation_ids_and_stale_requests_are_ignored() {
     assert_no_action_updates(&worker);
 }
 
+/// Check a fatal parser error produces a terminal snapshot without repeated idle updates.
 #[test]
 fn fatal_scan_errors_stop_work_and_do_not_flood_the_update_queue() {
     let fixture = Fixture::new(&[b">valid\nACGT\n>\n"]);
@@ -212,6 +231,7 @@ fn fatal_scan_errors_stop_work_and_do_not_flood_the_update_queue() {
     assert_quiet(&worker);
 }
 
+/// Check search identities, inclusive starting IDs and wraparound after the final indexed record.
 #[test]
 fn search_uses_operation_ids_and_wraps_only_after_the_indexed_end() {
     let fixture = Fixture::new(&[b">match-first\nA\n>other\nC\n>match-last\nT\n"]);
@@ -250,6 +270,7 @@ fn search_uses_operation_ids_and_wraps_only_after_the_indexed_end() {
     assert_no_action_updates(&worker);
 }
 
+/// Check cancelled requests remain cancelled even after a new operation succeeds.
 #[test]
 fn cancelled_actions_keep_their_flags_and_never_publish_success() {
     let fixture = Fixture::new(&[b">match\nACGT\n"]);
@@ -293,6 +314,7 @@ fn cancelled_actions_keep_their_flags_and_never_publish_success() {
     assert!(cancelled.load(Ordering::Relaxed));
 }
 
+/// Check a large full-record copy survives adjacent viewport generations unchanged.
 #[test]
 fn a_32_mib_copy_survives_view_resizes_without_losing_operation_identity() {
     let length = 32 * 1024 * 1024;
@@ -338,6 +360,7 @@ fn a_32_mib_copy_survives_view_resizes_without_losing_operation_identity() {
     assert!(!cancel.load(Ordering::Relaxed));
 }
 
+/// Check a pending name search survives viewport refreshes while scanning a large preceding record.
 #[test]
 fn search_survives_layout_generations_until_its_target_is_indexed() {
     let mut data = b">large\n".to_vec();
@@ -379,6 +402,7 @@ fn search_survives_layout_generations_until_its_target_is_indexed() {
     assert!(!cancel.load(Ordering::Relaxed));
 }
 
+/// Check cancel, close, file changes and record changes terminate a pending copy.
 #[test]
 fn context_changes_and_explicit_cancel_end_pending_operations() {
     for change in [
@@ -422,6 +446,7 @@ fn context_changes_and_explicit_cancel_end_pending_operations() {
     }
 }
 
+/// Check alias tabs reuse partial scan progress and retain the dataset until the last tab closes.
 #[test]
 fn duplicate_paths_share_one_incremental_dataset_across_tab_switches() {
     let mut data = b">long\n".to_vec();

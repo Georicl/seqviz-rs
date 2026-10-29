@@ -1,3 +1,4 @@
+//! Adaptive VCF table rendering and horizontally clipped original-text details.
 use super::text::{grapheme_width, tab_stops, walk_graphemes};
 use super::{Detail, Focus, Input, Overlay, VcfView, layout};
 use crate::modules::vcf::palette;
@@ -11,6 +12,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+/// Draw the document panels, then layer an information overlay or contig picker above them.
 pub(super) fn draw(frame: &mut Frame, view: &VcfView) {
     if view.layout.area.width == 0 || view.layout.area.height == 0 {
         return;
@@ -37,6 +39,7 @@ pub(super) fn draw(frame: &mut Frame, view: &VcfView) {
     }
 }
 
+/// Show header counts and current locus, or the initial read/error state.
 fn draw_header(frame: &mut Frame, view: &VcfView) {
     let lines = if let Some(snapshot) = &view.snapshot {
         vec![
@@ -66,6 +69,7 @@ fn draw_header(frame: &mut Frame, view: &VcfView) {
     frame.render_widget(Paragraph::new(lines), view.layout.header);
 }
 
+/// Choose visible table fields and widths, prioritising CHROM, POS, REF and ALT.
 fn columns(area: Rect) -> Vec<(usize, usize)> {
     let preferred = [8usize, 10, 10, 8, 14, 8, 7, 10];
     let available = usize::from(area.width);
@@ -102,6 +106,7 @@ fn columns(area: Rect) -> Vec<(usize, usize)> {
     columns
 }
 
+/// Fit styled graphemes to a cell width with padding or a truncation ellipsis.
 fn fit(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     if width == 0 {
         return Vec::new();
@@ -156,10 +161,12 @@ fn fit(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     fitted
 }
 
+/// Create one owned span with a uniform style for a table field.
 fn plain(text: impl Into<String>, style: Style) -> Vec<Span<'static>> {
     vec![Span::styled(text.into(), style)]
 }
 
+/// Colour literal nucleotide alleles while keeping symbolic and breakend text neutral.
 fn bases(text: &str, view: &VcfView) -> Vec<Span<'static>> {
     if text
         .bytes()
@@ -179,6 +186,7 @@ fn bases(text: &str, view: &VcfView) -> Vec<Span<'static>> {
     }
 }
 
+/// Fit selected fields to their allocated widths and apply row selection styling.
 fn table_line(
     fields: Vec<Vec<Span<'static>>>,
     columns: &[(usize, usize)],
@@ -200,6 +208,7 @@ fn table_line(
     Line::from(spans)
 }
 
+/// Render matching snapshot rows with adaptive columns or a loading/error message.
 fn draw_table(frame: &mut Frame, view: &VcfView) {
     if view.layout.table.height == 0 {
         return;
@@ -298,6 +307,7 @@ fn draw_table(frame: &mut Frame, view: &VcfView) {
     frame.render_widget(Paragraph::new(lines), view.layout.rows);
 }
 
+/// Style genotype tokens and missing values without changing logical TAB-separated text.
 fn detail_spans<'a>(line: &'a str, view: &VcfView) -> Vec<Span<'a>> {
     let normal = Style::default().fg(view.theme.foreground);
     if view.detail == Detail::Raw {
@@ -331,6 +341,8 @@ fn detail_spans<'a>(line: &'a str, view: &VcfView) -> Vec<Span<'a>> {
     result
 }
 
+/// Clip styled graphemes to horizontal display columns and expand original TABs.
+/// Return rendered spans, occupied viewport columns and the source display position reached.
 fn clip_spans(
     source: Vec<Span<'_>>,
     horizontal: usize,
@@ -374,6 +386,7 @@ fn clip_spans(
     (spans, rendered, used)
 }
 
+/// Apply logical text selection and horizontal clipping, adding an AD bar when space permits.
 fn visible_detail(line: &str, row: usize, view: &VcfView, stops: &[usize]) -> Vec<Span<'static>> {
     let selection = view
         .selection
@@ -414,6 +427,7 @@ fn visible_detail(line: &str, row: usize, view: &VcfView, stops: &[usize]) -> Ve
     spans
 }
 
+/// Draw detail tabs, aligned headings and the current INFO, sample or raw-record page.
 fn draw_details(frame: &mut Frame, view: &VcfView) {
     if view.layout.details.height == 0 {
         return;
@@ -525,6 +539,7 @@ fn draw_details(frame: &mut Frame, view: &VcfView) {
     frame.render_widget(Paragraph::new(lines), view.layout.detail_body);
 }
 
+/// Render the searchable contig popup with the current option visible.
 fn draw_picker(frame: &mut Frame, view: &VcfView) {
     let (area, list, start) = view.picker_layout();
     if area.width == 0 || area.height == 0 {

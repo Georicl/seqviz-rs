@@ -3,10 +3,11 @@
 //! Sources: Illumina FASTQ File Format; ONT Output Specifications (FASTQ);
 //! PacBioFileFormats QNAME convention; NCBI sra-tools fasterq-dump deflines.
 
+/// Ordered parsed header properties, including a detected-format label.
 type Properties = Vec<(String, String)>;
 
-/// Returns only fields present in a recognised header. Unknown headers are valid
-/// and produce no derived properties. Accepts headers with or without leading @.
+/// Extract present header fields and add a detected-format label. Unknown headers
+/// produce no properties. Accepts headers with or without a leading `@`.
 pub fn parse_fastq_header(header: &str) -> Properties {
     let header = header.trim_end_matches(['\r', '\n']);
     let header = header.strip_prefix('@').unwrap_or(header);
@@ -22,19 +23,23 @@ pub fn parse_fastq_header(header: &str) -> Properties {
         .unwrap_or_default()
 }
 
+/// Append a property only when its value is nonempty.
 fn add(fields: &mut Properties, name: &str, value: &str) {
     if !value.is_empty() {
         fields.push((name.to_owned(), value.to_owned()));
     }
 }
 
+/// Recognise a nonempty sequence of ASCII decimal digits.
 fn decimal(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit())
 }
+/// Recognise an ASCII decimal coordinate with an optional leading minus sign.
 fn coordinate(value: &str) -> bool {
     decimal(value.strip_prefix('-').unwrap_or(value))
 }
 
+/// Recognise modern or legacy Illumina names and preserve only present read metadata.
 fn parse_illumina(name: &str, rest: &[&str]) -> Option<Properties> {
     let parts: Vec<_> = name.split(':').collect();
     let mut fields = Vec::new();
@@ -115,6 +120,7 @@ fn parse_illumina(name: &str, rest: &[&str]) -> Option<Properties> {
     None
 }
 
+/// Recognise a UUID plus known ONT metadata and retain additional key/value attributes.
 fn parse_nanopore(name: &str, rest: &[&str]) -> Option<Properties> {
     let groups: Vec<_> = name.split('-').collect();
     let is_uuid = groups.len() == 5
@@ -166,6 +172,7 @@ fn parse_nanopore(name: &str, rest: &[&str]) -> Option<Properties> {
     Some(fields)
 }
 
+/// Extract movie, ZMW and optional subread or CCS segment coordinates from a QNAME.
 fn parse_pacbio(name: &str) -> Option<Properties> {
     let parts: Vec<_> = name.split('/').collect();
     if parts.len() < 3 || parts[0].is_empty() || !decimal(parts[1]) {
@@ -203,6 +210,7 @@ fn parse_pacbio(name: &str) -> Option<Properties> {
     Some(fields)
 }
 
+/// Separate SRA run accession, spot and read identifiers, retaining supplied name and length.
 fn parse_sra(name: &str, rest: &[&str]) -> Option<Properties> {
     let (id, slash_read) = name
         .split_once('/')
@@ -240,10 +248,12 @@ fn parse_sra(name: &str, rest: &[&str]) -> Option<Properties> {
     Some(fields)
 }
 
+/// Platform-header recognition and missing-field regressions.
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Look up one derived header property without consuming the property list.
     fn value<'a>(fields: &'a Properties, key: &str) -> Option<&'a str> {
         fields
             .iter()
@@ -251,6 +261,7 @@ mod tests {
             .map(|(_, value)| value.as_str())
     }
 
+    /// Check both Illumina conventions retain supplied coordinates, index and read metadata.
     #[test]
     fn illumina_modern_and_legacy_preserve_present_fields() {
         let fields = parse_fastq_header("@SIM:1:FCX:1:15:6329:1045:GATTACT+GTCTTAAC 1:N:0:ATCCGA");
@@ -263,6 +274,7 @@ mod tests {
         assert_eq!(value(&fields, "Run"), None);
     }
 
+    /// Check that a modern Illumina name does not manufacture absent UMI or read fields.
     #[test]
     fn absent_illumina_read_metadata_is_not_invented() {
         let fields = parse_fastq_header("SIM:1:FCX:1:15:-6329:1045");
@@ -271,6 +283,7 @@ mod tests {
         assert_eq!(value(&fields, "UMI"), None);
     }
 
+    /// Check ONT attributes retain their values, including unrecognised keys and embedded equals signs.
     #[test]
     fn nanopore_fields_keep_actual_values() {
         let fields = parse_fastq_header(
@@ -282,6 +295,7 @@ mod tests {
         assert_eq!(value(&fields, "Flow cell"), None);
     }
 
+    /// Check PacBio subread, unsegmented CCS and strand-specific CCS coordinate forms.
     #[test]
     fn pacbio_subread_ccs_and_segmented_ccs() {
         let fields = parse_fastq_header("m64011_190830_220126/42/10_500");
@@ -304,6 +318,7 @@ mod tests {
         );
     }
 
+    /// Check SRA dot/slash suffixes retain distinct run, spot and read properties.
     #[test]
     fn sra_variants_separate_accession_spot_and_read() {
         let fields = parse_fastq_header("@SRR123456.78/2 original_name length=151");
@@ -319,6 +334,7 @@ mod tests {
         assert_eq!(value(&parse_fastq_header("DRR12.5"), "Header length"), None);
     }
 
+    /// Check unknown names and malformed conventions yield no inferred platform properties.
     #[test]
     fn unknown_or_incomplete_patterns_produce_no_fabricated_properties() {
         for header in [

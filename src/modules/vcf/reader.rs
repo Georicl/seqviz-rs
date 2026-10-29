@@ -4,10 +4,13 @@ use super::model::*;
 use noodles_vcf as vcf;
 use std::io::{self, BufRead};
 
+/// Create an invalid-data error for malformed VCF input.
 pub(crate) fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+/// Read through #CHROM and return the parsed header, decoded byte length and line count.
+/// Preserve original line endings so the first record offset remains exact.
 pub(crate) fn read_header(input: &mut impl BufRead) -> io::Result<(VcfHeader, u64, u64)> {
     let mut raw = Vec::new();
     let mut line = Vec::new();
@@ -36,6 +39,7 @@ pub(crate) fn read_header(input: &mut impl BufRead) -> io::Result<(VcfHeader, u6
     Ok((header, length, line_number))
 }
 
+/// Validate VCF 4.0-4.5 headers and extract metadata without rewriting their text.
 fn parse_header(raw: String) -> io::Result<VcfHeader> {
     let first = raw.lines().next().unwrap_or_default();
     let version = first
@@ -134,6 +138,7 @@ fn parse_header(raw: String) -> io::Result<VcfHeader> {
     Ok(header)
 }
 
+/// Split metadata on unquoted commas while respecting quoted backslash escapes.
 fn metadata_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
     let mut boundaries = vec![0];
     let mut quoted = false;
@@ -161,6 +166,7 @@ fn metadata_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
         .collect()
 }
 
+/// Extract metadata key/value pairs and unescape quoted string values.
 fn metadata_fields(text: &str) -> Vec<(String, String)> {
     metadata_ranges(text)
         .into_iter()
@@ -263,6 +269,8 @@ fn validate_local_format_header(raw: &str) -> io::Result<bool> {
     Ok(adapted)
 }
 
+/// Validate one record against its header, preserving raw fields for lazy detail access.
+/// Classify each ALT independently without expanding INFO or sample values into stored objects.
 pub(crate) fn parse_record(bytes: &[u8], header: &VcfHeader) -> io::Result<VcfEntry> {
     let text =
         std::str::from_utf8(bytes).map_err(|e| invalid(format!("VCF record is not UTF-8: {e}")))?;
@@ -398,6 +406,7 @@ pub(crate) fn parse_record(bytes: &[u8], header: &VcfHeader) -> io::Result<VcfEn
     })
 }
 
+/// Infer an allele display kind, recognising symbolic alleles and both breakend forms.
 pub(crate) fn classify_variant(reference: &str, alternate: &str) -> VariantKind {
     if alternate == "*" {
         VariantKind::SpanningDeletion

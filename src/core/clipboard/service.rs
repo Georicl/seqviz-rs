@@ -1,3 +1,5 @@
+//! Bounded background clipboard queue and operation-aware result delivery.
+
 use super::{ClipboardOutput, osc52_sequence, system};
 use std::{
     env, io,
@@ -9,34 +11,51 @@ use std::{
     thread::{self, JoinHandle},
 };
 
+/// Queued text plus document/operation identity and a cooperative cancellation flag.
 struct CopyRequest {
+    /// Copy operation ID used to discard superseded results.
     operation_id: u64,
+    /// Stable destination tab ID.
     file: usize,
+    /// Text passed to the clipboard backend or OSC 52 encoder.
     text: String,
+    /// Cancellation flag shared with the originating page.
     cancel: Arc<AtomicBool>,
 }
 
+/// Clipboard result tagged so the UI can discard stale or inactive operations.
 pub struct ClipboardUpdate {
+    /// Copy operation ID used to discard superseded results.
     pub operation_id: u64,
+    /// Stable destination tab ID.
     pub file: usize,
+    /// Prepared clipboard output or the error from the selected backend.
     pub result: io::Result<ClipboardOutput>,
 }
 
 /// One backend thread and at most one queued copy. Submitting never waits for a command.
 pub struct ClipboardService {
+    /// Bounded queue sender, removed during shutdown to disconnect the worker.
     requests: Option<mpsc::SyncSender<CopyRequest>>,
+    /// Completed copy results for validation and delivery by the UI.
     pub updates: mpsc::Receiver<ClipboardUpdate>,
+    /// Shared shutdown flag and active backend cancellation handle.
     state: Arc<Mutex<ServiceState>>,
+    /// Worker handle joined after active work is cancelled.
     thread: Option<JoinHandle<()>>,
 }
 
+/// Mutex-protected shutdown state and cancellation handle for the active copy.
 #[derive(Default)]
 struct ServiceState {
+    /// Prevents a queued request from starting during shutdown.
     stopping: bool,
+    /// Cancellation flag for the copy currently running in the backend.
     active: Option<Arc<AtomicBool>>,
 }
 
 impl ClipboardService {
+    /// Start the system clipboard worker, choosing terminal copy preparation under SSH.
     pub fn start() -> Self {
         Self::start_with(
             env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some(),
@@ -44,6 +63,7 @@ impl ClipboardService {
         )
     }
 
+    /// Start a bounded worker with an injectable system backend and explicit SSH mode.
     fn start_with(
         ssh: bool,
         mut backend: impl FnMut(&str, &AtomicBool) -> io::Result<()> + Send + 'static,
@@ -80,7 +100,7 @@ impl ClipboardService {
         }
     }
 
-    /// The file permission is checked before queueing text or calling a backend.
+    /// The document's copy permission is checked before queueing text or calling a backend.
     pub fn submit(
         &self,
         operation_id: u64,
@@ -117,6 +137,7 @@ impl ClipboardService {
 }
 
 impl Drop for ClipboardService {
+    /// Cancel the registered copy, disconnect the queue and join the clipboard thread.
     fn drop(&mut self) {
         {
             let mut state = self.state.lock().unwrap();
@@ -132,6 +153,7 @@ impl Drop for ClipboardService {
     }
 }
 
+/// Try a local system copy or prepare OSC 52 under SSH/failure, respecting cancellation.
 fn prepare(
     text: &str,
     ssh: bool,
@@ -154,11 +176,13 @@ fn prepare(
     Ok(ClipboardOutput::Osc52(osc52_sequence(text)))
 }
 
+/// Clipboard queue responsiveness, cancellation and fallback tests.
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// Verify submission returns while a slow backend runs on another thread.
     #[test]
     fn slow_backend_does_not_block_submission_or_caller_work() {
         let caller = thread::current().id();
@@ -192,6 +216,7 @@ mod tests {
         assert_eq!(update.result.unwrap(), ClipboardOutput::System);
     }
 
+    /// Keep forbidden text and already-cancelled requests away from the system backend.
     #[test]
     fn denied_and_cancelled_requests_never_call_the_backend() {
         let service = ClipboardService::start_with(false, |_, _| panic!("backend called"));
@@ -225,6 +250,7 @@ mod tests {
         );
     }
 
+    /// Return encoded OSC 52 payloads under SSH or local backend failure for later UI output.
     #[test]
     fn ssh_and_failed_local_backend_return_osc52_without_terminal_output() {
         let ssh = ClipboardService::start_with(true, |_, _| panic!("server clipboard called"));
@@ -259,6 +285,7 @@ mod tests {
         ));
     }
 
+    /// Verify shutdown sets the active backend's cancellation flag before waiting for it.
     #[test]
     fn dropping_the_service_cancels_a_registered_backend_before_joining() {
         let (started, ready) = mpsc::channel();
@@ -278,6 +305,7 @@ mod tests {
         assert!(cancel.load(Ordering::Relaxed));
     }
 
+    /// Discard a backend result if its operation is cancelled before delivery.
     #[test]
     fn cancelling_an_in_flight_backend_suppresses_its_reply() {
         let (started, ready) = mpsc::channel();

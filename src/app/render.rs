@@ -6,6 +6,7 @@ use ratatui::{
     style::Style,
     widgets::{Block, Paragraph},
 };
+/// Render chrome, the active document and its status or input prompt in prepared regions.
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let theme = &app.config.theme;
     let layout = app.hits;

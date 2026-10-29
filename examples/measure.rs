@@ -9,10 +9,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Convert a measured duration to fractional milliseconds for TSV output.
 fn milliseconds(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
+/// Measure first-window latency, indexing, statistics and cached random-range reads.
 fn main() -> io::Result<()> {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if args.len() != 2 {

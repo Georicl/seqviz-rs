@@ -16,12 +16,17 @@ use std::{
 
 /// Alias tabs keep independent view state and share a single backend dataset.
 pub(crate) struct SessionFiles {
+    /// Original input paths indexed by stable tab ID.
     paths: Vec<PathBuf>,
+    /// First tab ID for each canonical path, shared by alias tabs.
     owners: Vec<usize>,
+    /// Per-tab closure flags used to find the final live alias.
     closed: Vec<bool>,
 }
 
+/// Resolve canonical paths to stable dataset owners while retaining independent tab slots.
 impl SessionFiles {
+    /// Group aliases by canonical path, falling back to the original path if resolution fails.
     pub(crate) fn new(paths: Vec<PathBuf>) -> Self {
         let mut canonical_owners = HashMap::new();
         let owners = paths
@@ -40,18 +45,22 @@ impl SessionFiles {
         }
     }
 
+    /// Return the number of original input slots, including closed tabs and aliases.
     pub(crate) fn len(&self) -> usize {
         self.paths.len()
     }
 
+    /// Return the original input path for a valid tab ID.
     pub(crate) fn path(&self, file: usize) -> &Path {
         &self.paths[file]
     }
 
+    /// Return the first tab ID whose canonical path matches this tab's path.
     pub(crate) fn owner(&self, file: usize) -> usize {
         self.owners[file]
     }
 
+    /// Check that a tab ID exists and has not been closed.
     pub(crate) fn is_open(&self, file: usize) -> bool {
         self.closed.get(file).is_some_and(|closed| !closed)
     }
@@ -69,19 +78,25 @@ impl SessionFiles {
     }
 }
 
+/// Application-facing handle for session requests, updates and background cancellation.
 pub struct Worker {
+    /// Generic transport and thread lifetime for the domain-aware session.
     tasks: TaskWorker<ModuleRequest, ModuleUpdate>,
 }
 
 impl Worker {
+    /// Construct the session and its domain backends on the background worker thread.
     pub fn start(paths: Vec<PathBuf>, cache: PathBuf) -> Self {
         Self {
+            // The closure receives an update sender and the shared cancellation flag.
+            // Requests travel in the opposite direction through TaskWorker's request channel.
             tasks: TaskWorker::spawn(ModuleRequest::Quit, move |updates, cancel| {
                 Session::new(paths, cache, updates, cancel)
             }),
         }
     }
 
+    /// Forward a routed request to the generic task worker without waiting for a reply.
     pub(crate) fn send_module(&self, request: ModuleRequest) {
         self.tasks.send(request);
     }
@@ -93,8 +108,10 @@ impl Worker {
 }
 
 impl Deref for Worker {
+    /// Generic task transport exposed through the session handle.
     type Target = TaskWorker<ModuleRequest, ModuleUpdate>;
 
+    /// Expose the underlying worker channels and cancellation handle to existing callers.
     fn deref(&self) -> &Self::Target {
         &self.tasks
     }
@@ -102,18 +119,29 @@ impl Deref for Worker {
 
 /// One runner owns both domain backends; only the active domain advances I/O.
 struct Session {
+    /// Session-level tab and canonical-path ownership state.
     files: SessionFiles,
+    /// Root directory used for source probing and backend indexes.
     cache: PathBuf,
+    /// Detected module per dataset owner; aliases resolve through `files`.
     modules: Vec<Option<ModuleKind>>,
+    /// Domain whose incremental I/O may advance on the next tick.
     active: Option<ModuleKind>,
+    /// Sequence backend and its owned datasets.
     sequence: sequence::backend::Backend,
+    /// VCF backend and its owned datasets.
     vcf: vcf::backend::Backend,
+    /// Sequence replies waiting to be wrapped and forwarded.
     sequence_updates: mpsc::Receiver<sequence::protocol::Update>,
+    /// VCF replies waiting to be wrapped and forwarded.
     vcf_updates: mpsc::Receiver<vcf::protocol::Update>,
+    /// Application-facing channel for probe results and domain replies.
     updates: mpsc::Sender<ModuleUpdate>,
 }
 
+/// Coordinate format detection, request routing and incremental work across both domains.
 impl Session {
+    /// Create both backends and update channels with matching, independently owned file maps.
     fn new(
         paths: Vec<PathBuf>,
         cache: PathBuf,
@@ -140,6 +168,7 @@ impl Session {
         }
     }
 
+    /// Pause the active scan, probe up to 8192 decoded bytes and report the detected domain.
     fn open(&mut self, file: usize) {
         if !self.files.is_open(file) {
             return;
@@ -172,6 +201,7 @@ impl Session {
         let _ = self.updates.send(update);
     }
 
+    /// Drain queued sequence requests, then VCF requests, stopping if either backend exits.
     fn flush(
         &mut self,
         sequence: &mut Vec<sequence::protocol::Request>,
@@ -182,8 +212,10 @@ impl Session {
 }
 
 impl Driver for Session {
+    /// Routed lifecycle and domain messages accepted by this session.
     type Request = ModuleRequest;
 
+    /// Use the active backend's polling interval, or an idle minute with no active domain.
     fn timeout(&self) -> Duration {
         match self.active {
             Some(ModuleKind::Sequence) => self.sequence.timeout(),
@@ -192,6 +224,7 @@ impl Driver for Session {
         }
     }
 
+    /// Route requests in order, flush at domain/lifecycle boundaries and ignore closed-tab views.
     fn handle_requests(&mut self, requests: impl Iterator<Item = ModuleRequest>) -> bool {
         let mut sequence = Vec::new();
         let mut vcf = Vec::new();
@@ -253,6 +286,7 @@ impl Driver for Session {
         self.flush(&mut sequence, &mut vcf)
     }
 
+    /// Advance only the active backend and forward both domains' pending replies to the UI.
     fn tick(&mut self) -> bool {
         let keep_running = match self.active {
             Some(ModuleKind::Sequence) => self.sequence.tick(),
@@ -276,10 +310,12 @@ impl Driver for Session {
     }
 }
 
+/// Session routing and foreground scan ownership regressions.
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Verify a failed foreground probe leaves the previous domain paused until requested again.
     #[test]
     fn failed_foreground_open_stops_the_previous_module_scan() {
         let directory = tempfile::tempdir().unwrap();

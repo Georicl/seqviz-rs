@@ -1,5 +1,7 @@
+//! Dataset integration tests for bounded scanning, persistent indexes and interval access.
 use super::*;
 
+/// Write input bytes to a temporary file with the requested extension.
 fn fixture(content: &[u8], extension: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(format!("input.{extension}"));
@@ -7,6 +9,7 @@ fn fixture(content: &[u8], extension: &str) -> (tempfile::TempDir, std::path::Pa
     (dir, path)
 }
 
+/// Advance bounded scan steps until completion, failing on scan errors or lack of completion.
 fn finish(data: &mut Dataset, budget: usize) {
     for _ in 0..100_000 {
         let progress = data.step(budget).unwrap();
@@ -18,6 +21,7 @@ fn finish(data: &mut Dataset, budget: usize) {
     panic!("scan did not finish");
 }
 
+/// Verify partial-record browsing, compact spans and final length and GC aggregates for long FASTA.
 #[test]
 fn long_fasta_is_browsable_before_record_completion_and_spans_are_compact() {
     let mut input = b">one full header\n".to_vec();
@@ -56,6 +60,7 @@ fn long_fasta_is_browsable_before_record_completion_and_spans_are_compact() {
     assert!((stats.gc.unwrap() - (100_004.0 / 250_004.0 * 100.0)).abs() < 0.000001);
 }
 
+/// Verify one-byte FASTQ scanning, quality statistics, interval reads and reconstructed records.
 #[test]
 fn fastq_accepts_wrapped_sequence_quality_and_marker_quality_characters() {
     let (dir, path) = fixture(
@@ -80,6 +85,7 @@ fn fastq_accepts_wrapped_sequence_quality_and_marker_quality_characters() {
     );
 }
 
+/// Verify protein-extension classification suppresses GC and FASTA copies wrap at 60 characters.
 #[test]
 fn fasta_copy_wraps_at_sixty_and_protein_gc_is_not_applicable() {
     let mut input = b">protein actual header\n".to_vec();
@@ -101,6 +107,7 @@ fn fasta_copy_wraps_at_sixty_and_protein_gc_is_not_applicable() {
     assert_eq!(stats.n50, Some(124));
 }
 
+/// Verify reopening reuses complete records, rebuilds partial records and invalidates changed input.
 #[test]
 fn persistent_complete_and_partial_indexes_are_reused_and_changed_source_invalidates() {
     let (dir, path) = fixture(b">one\nACGT\n>two\nGGGG\n>three\nNNNN\n", "fa");
@@ -125,6 +132,7 @@ fn persistent_complete_and_partial_indexes_are_reused_and_changed_source_invalid
     assert_eq!(data.record(0).unwrap().unwrap().name, "new");
 }
 
+/// Verify malformed FASTQ stops once, retaining earlier records without treating quality markers as headers.
 #[test]
 fn malformed_fastq_stops_without_guessing_at_next_at_sign() {
     let (dir, path) = fixture(
@@ -153,6 +161,7 @@ fn malformed_fastq_stops_without_guessing_at_next_at_sign() {
     assert_eq!(data.step(1024).unwrap().errors, 1);
 }
 
+/// Verify name searches are case-insensitive literal substrings with an inclusive, nonwrapping start.
 #[test]
 fn literal_name_search_starts_inclusively_without_implicit_wrap() {
     let (dir, path) = fixture(
@@ -168,6 +177,7 @@ fn literal_name_search_starts_inclusively_without_implicit_wrap() {
     assert_eq!(data.find_name("description", 0).unwrap(), None);
 }
 
+/// Verify range reads and cancelled copies restore the cursor needed by subsequent scan steps.
 #[test]
 fn cancellation_and_range_reads_leave_scan_position_intact() {
     let (dir, path) = fixture(b">one\nACGT\n>two\nCCCC\n", "fa");
@@ -185,6 +195,7 @@ fn cancellation_and_range_reads_leave_scan_position_intact() {
     assert_eq!(data.read_range(1, 0, 4).unwrap().sequence, b"CCCC");
 }
 
+/// Verify content identifies FASTA despite an unrelated extension and distinguishes sampled alphabets.
 #[test]
 fn content_detection_does_not_depend_on_extension() {
     let (dir, path) = fixture(b">name\nACG\n", "data");
@@ -198,6 +209,7 @@ fn content_detection_does_not_depend_on_extension() {
     assert_eq!(detect_type(b"MPEPTIDE*"), SeqType::Protein);
 }
 
+/// Verify split comments never enter sequence spans and a final defline produces an empty record.
 #[test]
 fn fasta_comments_across_chunks_are_not_in_sequence_spans() {
     let (dir, path) = fixture(
@@ -217,6 +229,7 @@ fn fasta_comments_across_chunks_are_not_in_sequence_spans() {
     );
 }
 
+/// Verify empty and comment-only FASTA complete without inventing records.
 #[test]
 fn empty_and_comment_only_fasta_have_zero_records() {
     for content in [
@@ -232,6 +245,7 @@ fn empty_and_comment_only_fasta_have_zero_records() {
     }
 }
 
+/// Verify cancelled statistics and searches report interruption and leave later queries usable.
 #[test]
 fn cancelled_sql_operations_report_interrupted_and_remove_hooks() {
     let (dir, path) = fixture(b">one\nA\n", "fa");
@@ -251,6 +265,7 @@ fn cancelled_sql_operations_report_interrupted_and_remove_hooks() {
     assert_eq!(data.find_name("one", 0).unwrap(), Some(0));
 }
 
+/// Verify competing dataset handles use isolated caches and remove the private cache on drop.
 #[test]
 fn concurrent_datasets_use_isolated_writer_caches() {
     use std::io::Write;
@@ -277,6 +292,7 @@ fn concurrent_datasets_use_isolated_writer_caches() {
     assert_eq!(reopened.progress().records, 2);
 }
 
+/// Verify a same-size rewrite with restored mtime invalidates live and reopened cached indexes.
 #[test]
 fn source_rewrite_invalidates_live_partial_complete_and_reopened_indexes() {
     for mode in 0..3 {

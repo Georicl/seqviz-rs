@@ -3,12 +3,15 @@ use super::theme::parse_color;
 use ratatui::style::Color;
 use std::io;
 
+/// Case-insensitive colours for bases, ambiguity codes, gaps and unknown bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NucleotidePalette {
+    /// Colours ordered as A, C, G, T, U, ambiguity, gap and unknown.
     colors: [Color; 8],
 }
 
 impl Default for NucleotidePalette {
+    /// Assign the built-in nucleotide colours, with T and U sharing the same default.
     fn default() -> Self {
         Self {
             colors: [
@@ -26,6 +29,7 @@ impl Default for NucleotidePalette {
 }
 
 impl NucleotidePalette {
+    /// Map an ASCII base or IUPAC ambiguity code to its configured colour.
     pub fn nucleotide_color(&self, base: u8) -> Color {
         let index = match base.to_ascii_uppercase() {
             b'A' => 0,
@@ -40,6 +44,7 @@ impl NucleotidePalette {
         self.colors[index]
     }
 
+    /// Apply named nucleotide colour overrides, rejecting unknown classes or invalid colours.
     pub(crate) fn apply(
         &mut self,
         colors: impl IntoIterator<Item = (String, String)>,
@@ -67,10 +72,12 @@ impl NucleotidePalette {
     }
 }
 
+/// Nucleotide colour classes, defaults and validation tests.
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Verify case folding and shared colours for ambiguity codes and gap symbols.
     #[test]
     fn preserves_nucleotide_defaults_and_semantic_classes() {
         let palette = NucleotidePalette::default();
@@ -102,6 +109,7 @@ mod tests {
         );
     }
 
+    /// Reject unrecognised nucleotide names and unparsable colour values.
     #[test]
     fn rejects_unknown_nucleotide_settings_and_invalid_colors() {
         for (name, value) in [("a", "not-a-colour"), ("adenine", "green")] {
