@@ -2,6 +2,7 @@
 use super::state::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 impl App {
+    /// Handle global shortcuts unless the active page captures input; always allow Ctrl-C.
     pub fn key(&mut self, key: KeyEvent) {
         self.redraw = true;
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -27,6 +28,7 @@ impl App {
         }
         self.flush_actions();
     }
+    /// Switch tabs on eligible clicks, otherwise forward the event to the active page.
     pub fn mouse(&mut self, event: MouseEvent) {
         self.redraw = true;
         if self.hits.too_small {

@@ -1,9 +1,11 @@
+//! Keyboard and pointer interaction for VCF navigation, prompts and text selection.
 use super::{Detail, Focus, Input, Overlay, VcfView, layout};
 use crate::modules::vcf::protocol::Request;
 use crate::modules::view::Action;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 
 impl VcfView {
+    /// Route keys through modal editors/overlays before table and detail navigation.
     pub(super) fn key_event(&mut self, event: KeyEvent) {
         self.redraw = true;
         if self.input.is_some() {
@@ -124,6 +126,7 @@ impl VcfView {
             _ => {}
         }
     }
+    /// Edit contig or position input and submit a validated selection or lookup request.
     fn input_event(&mut self, event: KeyEvent) {
         let picker = matches!(self.input, Some(Input::Contig(_)));
         match event.code {
@@ -180,6 +183,7 @@ impl VcfView {
             }
         }
     }
+    /// Apply the highlighted contig filter and reset record/detail navigation state.
     fn choose_contig(&mut self) {
         let Some((contig, _)) = self.picker_options().get(self.picker_row).cloned() else {
             return;
@@ -200,6 +204,7 @@ impl VcfView {
         self.redraw = true;
         self.message.clear();
     }
+    /// Move by a signed row count in the focused table or detail panel.
     fn move_row(&mut self, delta: i64) {
         if self.focus == Focus::Table {
             self.change_record(self.selected.saturating_add_signed(delta));
@@ -207,6 +212,7 @@ impl VcfView {
         }
         self.select_detail_row(self.detail_row.saturating_add_signed(delta as isize));
     }
+    /// Clamp the selected detail row, clear dragged text and scroll it into view.
     fn select_detail_row(&mut self, row: usize) {
         self.selection = None;
         self.dragging = false;
@@ -220,6 +226,8 @@ impl VcfView {
             self.detail_start = self.detail_row.saturating_add(1).saturating_sub(height);
         }
     }
+    /// Map a terminal cell to a logical detail row and original character index.
+    /// Account for horizontal scrolling, tab stops and complete grapheme clusters.
     pub(super) fn detail_position(&self, x: u16, y: u16) -> (usize, usize) {
         let area = self.layout.detail_body;
         let row = (self.detail_start
@@ -245,6 +253,7 @@ impl VcfView {
         });
         (row, index)
     }
+    /// Handle contig picking, panel focus, row clicks and original-text drag selection.
     pub(super) fn mouse_event(&mut self, event: MouseEvent) {
         self.redraw = true;
         let (x, y) = (event.column, event.row);

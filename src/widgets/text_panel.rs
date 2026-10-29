@@ -9,14 +9,19 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthChar;
 
+/// Wrapped text, scroll offset and inclusive selection endpoints in character coordinates.
 #[derive(Default)]
 pub struct State {
+    /// Zero-based index of the first visible wrapped row.
     pub scroll: usize,
+    /// Text after display-width wrapping.
     pub lines: Vec<String>,
+    /// Inclusive (row, character-index) endpoints; drag direction may be reversed.
     pub selection: Option<((usize, usize), (usize, usize))>,
 }
 
 impl State {
+    /// Wrap replacement lines to display width and clamp scrolling to the visible height.
     pub fn reflow(&mut self, lines: Vec<String>, width: u16, height: u16) {
         self.lines = lines
             .into_iter()
@@ -47,6 +52,7 @@ impl State {
         (row, index)
     }
 
+    /// Return the inclusive selected character range, or all wrapped lines when unselected.
     pub fn selected_text(&self) -> String {
         let Some((a, b)) = self.selection else {
             return self.lines.join("\n");
@@ -70,11 +76,13 @@ impl State {
             .join("\n")
     }
 
+    /// Remove the selection without changing the text or scroll position.
     pub fn clear_selection(&mut self) {
         self.selection = None;
     }
 }
 
+/// Render a bordered scrolling panel with per-character selection backgrounds.
 pub fn draw(frame: &mut Frame, area: Rect, title: &str, state: &State, theme: &Theme) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -114,6 +122,7 @@ pub fn draw(frame: &mut Frame, area: Rect, title: &str, state: &State, theme: &T
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Wrap by terminal display columns and omit control characters, retaining an empty row.
 pub fn wrap_line(line: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut row = String::new();
@@ -133,10 +142,12 @@ pub fn wrap_line(line: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// Unicode display-column wrapping and control-character filtering tests.
 #[cfg(test)]
 mod tests {
     use super::wrap_line;
 
+    /// Check wide Unicode wrapping, empty lines and removal of terminal control characters.
     #[test]
     fn information_wrapping_respects_display_columns() {
         assert_eq!(wrap_line("ab界cd", 4), vec!["ab界", "cd"]);

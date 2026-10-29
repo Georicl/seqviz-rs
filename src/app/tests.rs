@@ -1,12 +1,16 @@
+//! Application routing, tab lifetime and modal-input regression tests.
+
 use super::{config::Config, state::App};
 use crate::modules::session::Worker;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+/// Create an application with a temporary cache and wait for its first document.
 fn app(paths: Vec<std::path::PathBuf>, cache: &std::path::Path) -> App {
     let worker = Worker::start(paths.clone(), cache.into());
     let mut app = App::new(paths, Config::default(), worker);
     wait_ready(&mut app);
     app
 }
+/// Drive layout and background replies until the active fixture becomes copyable.
 fn wait_ready(app: &mut App) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     app.prepare_frame(ratatui::layout::Rect::new(0, 0, 100, 30));
@@ -26,6 +30,7 @@ fn wait_ready(app: &mut App) {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
+/// Verify tab navigation and closing remain global while modal input consumes page keys.
 #[test]
 fn global_shortcuts_and_modal_input_have_separate_owners() {
     let tmp = tempfile::tempdir().unwrap();
@@ -46,6 +51,7 @@ fn global_shortcuts_and_modal_input_have_separate_owners() {
     assert!(app.quit);
 }
 
+/// Keep input on a current-tab click and cancel it when switching to another tab.
 #[test]
 fn input_box_still_allows_mouse_tab_switching() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
@@ -78,6 +84,7 @@ fn input_box_still_allows_mouse_tab_switching() {
     assert!(!app.view().captures_input());
 }
 
+/// Probe mixed formats by content and keep a duplicate VCF tab usable after alias closure.
 #[test]
 fn mixed_modules_route_by_content_and_keep_alias_tabs_usable() {
     use std::fs;
@@ -103,6 +110,7 @@ fn mixed_modules_route_by_content_and_keep_alias_tabs_usable() {
     assert!(app.view().status().message.contains("FASTA"));
 }
 
+/// Keep a failed loading page responsive to the global close shortcut.
 #[test]
 fn failed_background_probe_remains_a_closable_document() {
     let tmp = tempfile::tempdir().unwrap();
@@ -121,6 +129,7 @@ fn failed_background_probe_remains_a_closable_document() {
     assert!(app.quit);
 }
 
+/// Allow the tiny-terminal quit shortcut even while a page input prompt is open.
 #[test]
 fn tiny_terminal_quit_hint_works_with_modal_input_open() {
     let tmp = tempfile::tempdir().unwrap();

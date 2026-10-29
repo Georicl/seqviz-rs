@@ -10,37 +10,57 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+/// Worker scheduling, cancellation and shared-dataset regression tests.
 #[cfg(test)]
 #[path = "backend_tests.rs"]
 mod tests;
 
+/// Throttle scan-progress snapshots; explicit view or cancel requests can publish immediately.
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(100);
+/// Minimum interval between partial statistics refreshes.
 const STATS_INTERVAL: Duration = Duration::from_secs(1);
 
+/// A dataset shared by alias tabs, with cached metadata, statistics and fatal I/O state.
 pub(super) struct Slot {
+    /// Indexed source shared by every tab with the same canonical owner.
     pub(super) dataset: Dataset,
+    /// Physical source size captured once when the shared dataset opens.
     file_size: Option<u64>,
+    /// Fatal I/O failure remembered to stop retries and include in snapshots.
     failure: Option<String>,
+    /// Last statistics result, reused until indexed progress changes.
     stats: Option<Stats>,
+    /// Scan state used to produce the cached statistics.
     stats_progress: Option<ProgressKey>,
+    /// Time of the last statistics attempt, used to throttle partial refreshes.
     last_stats: Instant,
 }
 
+/// Pause and statistics preferences that remain independent for each alias tab.
 #[derive(Default)]
 struct TabState {
+    /// Whether this tab has explicitly paused background indexing.
     paused: bool,
+    /// Whether this tab has requested statistics updates.
     statistics: bool,
 }
 
+/// Comparable scan progress used to invalidate snapshots and cached statistics.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct ProgressKey {
+    /// Number of records discovered by the scanner.
     pub(super) records: u64,
+    /// Number of decoded source bytes scanned.
     pub(super) bytes: u64,
+    /// Whether scanning reached the end of the source.
     pub(super) complete: bool,
+    /// Number of parser errors recorded in the index.
     pub(super) errors: u64,
+    /// Fatal scan error that prevents further progress.
     pub(super) error: Option<String>,
 }
 impl From<&Progress> for ProgressKey {
+    /// Extract the progress fields that determine whether cached results have changed.
     fn from(progress: &Progress) -> Self {
         Self {
             records: progress.records,
@@ -52,24 +72,40 @@ impl From<&Progress> for ProgressKey {
     }
 }
 
+/// Owns sequence datasets and advances work for the active viewport on the worker thread.
 pub(crate) struct Backend {
+    /// Open-tab state and canonical dataset ownership mapping.
     files: SessionFiles,
+    /// Directory for sequence indexes and source seek checkpoints.
     cache: PathBuf,
+    /// Lazily opened datasets stored only at canonical owner indices.
     slots: Vec<Option<Slot>>,
+    /// Independent pause/statistics preferences indexed by tab.
     tabs: Vec<TabState>,
+    /// Active viewport controlling which dataset advances.
     view: Option<ViewRequest>,
+    /// Pending cancellable name search for the active context.
     search: Option<SearchJob>,
+    /// Pending cancellable copy waiting for its record or range.
     copy: Option<CopyJob>,
+    /// Highest accepted operation ID, preventing stale requests from replacing current work.
     last_operation_id: u64,
+    /// Whether navigation still needs an indexed prefix even while background work is paused.
     foreground_read: bool,
+    /// Whether changes require a fresh viewport snapshot.
     dirty: bool,
+    /// Timestamp used to throttle viewport publication.
     last_publish: Instant,
+    /// Whether the next worker tick should run without waiting for a request.
     working: bool,
+    /// Channel carrying sequence snapshots and operation results to the session.
     updates: mpsc::Sender<Update>,
+    /// Shared cancellation flag checked by expensive statistics queries.
     cancel: Arc<AtomicBool>,
 }
 
 impl Backend {
+    /// Create unopened dataset slots and independent pause/statistics state for each tab.
     pub(crate) fn new(
         files: SessionFiles,
         cache: PathBuf,
@@ -95,6 +131,7 @@ impl Backend {
         }
     }
 
+    /// Run immediately while scanning, otherwise wait until a pending snapshot is due.
     fn timeout(&self) -> Duration {
         if self.working {
             Duration::ZERO
@@ -105,6 +142,7 @@ impl Backend {
         }
     }
 
+    /// Cancel and remove pending search and copy jobs without resetting their flags.
     fn cancel_operations(&mut self) {
         if let Some(job) = self.search.take() {
             job.cancel.store(true, Ordering::Relaxed);
@@ -114,6 +152,7 @@ impl Backend {
         }
     }
 
+    /// Accept a newer, uncancelled operation for the current file and resume its scan.
     fn accept_operation(&mut self, file: usize, operation_id: u64, cancel: &AtomicBool) -> bool {
         if self.view.as_ref().is_none_or(|v| v.file != file)
             || operation_id <= self.last_operation_id
@@ -128,6 +167,7 @@ impl Backend {
         true
     }
 
+    /// Open the shared dataset on demand, replace the viewport and cancel jobs on context changes.
     fn set_view(&mut self, next: ViewRequest) {
         let file = next.file;
         if !self.files.is_open(file) {
@@ -175,7 +215,7 @@ impl Backend {
         self.last_publish = Instant::now() - PUBLISH_INTERVAL;
     }
 
-    /// Returns false on Quit; all other requests update scheduling state only.
+    /// Apply a request, opening a dataset for a new view when needed; return false on Quit.
     fn request(&mut self, request: Request) -> bool {
         match request {
             Request::Quit => {
@@ -248,6 +288,7 @@ impl Backend {
         true
     }
 
+    /// Close one tab and release its shared dataset only when its final alias closes.
     fn close(&mut self, file: usize) {
         let Some((owner, last_alias)) = self.files.close(file) else {
             return;
@@ -263,6 +304,8 @@ impl Backend {
         }
     }
 
+    /// Advance one scan chunk, service pending jobs and publish a throttled snapshot.
+    /// Return false when the snapshot receiver has disconnected.
     fn tick(&mut self) -> bool {
         self.working = false;
         let Some(current) = &self.view else {
@@ -333,6 +376,8 @@ impl Backend {
     }
 }
 
+/// Recompute requested statistics when progress changes and the throttle allows it.
+/// Return whether the cached statistics were replaced.
 fn update_statistics(
     slot: &mut Slot,
     tab: &mut TabState,
@@ -367,10 +412,12 @@ fn update_statistics(
     changed
 }
 
+/// Publish a file-scoped status message, ignoring a disconnected receiver.
 fn message(updates: &mpsc::Sender<Update>, file: usize, text: String) {
     let _ = updates.send(Update::Message { file, text });
 }
 
+/// Read the bounded record list and sequence window, attaching cached statistics and failures.
 fn snapshot(slot: &mut Slot, request: ViewRequest, paused: bool) -> io::Result<Snapshot> {
     let record = slot.dataset.record(request.record)?;
     let window = if record.is_some() {
@@ -404,12 +451,15 @@ fn snapshot(slot: &mut Slot, request: ViewRequest, paused: bool) -> io::Result<S
 }
 
 impl Driver for Backend {
+    /// Sequence-domain commands accepted by the shared task runner.
     type Request = Request;
 
+    /// Use the sequence scheduler to choose the worker receive timeout.
     fn timeout(&self) -> Duration {
         Backend::timeout(self)
     }
 
+    /// Coalesce adjacent viewport requests while preserving intervening operation ordering.
     fn handle_requests(&mut self, incoming: impl Iterator<Item = Request>) -> bool {
         // Coalesce adjacent views only. An action between views needs the preceding context.
         let mut pending_view = None;
@@ -431,6 +481,7 @@ impl Driver for Backend {
         true
     }
 
+    /// Advance the sequence backend once after the worker processes its request batch.
     fn tick(&mut self) -> bool {
         Backend::tick(self)
     }

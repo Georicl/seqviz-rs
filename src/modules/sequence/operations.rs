@@ -11,12 +11,19 @@ use std::{
     },
 };
 
+/// Literal record-name search retried as new records become indexed.
 pub(super) struct SearchJob {
+    /// Monotonic operation identity echoed in success or failure updates.
     pub operation_id: u64,
+    /// Tab index that requested the operation.
     pub file: usize,
+    /// Literal substring to find in indexed record names.
     pub query: String,
+    /// First zero-based record ID included in the search; wrapping waits until scanning stops.
     pub after: u64,
+    /// Flag owned by this operation; once set, it remains cancelled.
     pub cancel: Arc<AtomicBool>,
+    /// Last scan state searched, avoiding repeat queries when no searchable records changed.
     pub tried: Option<ProgressKey>,
 }
 
@@ -78,15 +85,22 @@ impl SearchJob {
     }
 }
 
+/// Copy request whose identity and cancellation flag survive viewport refreshes.
 pub(super) struct CopyJob {
+    /// Monotonic operation identity echoed in success or failure updates.
     pub operation_id: u64,
+    /// Tab index that requested the operation.
     pub file: usize,
+    /// Zero-based record ID to copy.
     pub record: u64,
+    /// Zero-based half-open sequence interval, or None for the complete formatted record.
     pub range: Option<(u64, u64)>,
+    /// Flag owned by this operation; once set, it remains cancelled.
     pub cancel: Arc<AtomicBool>,
 }
 
 impl CopyJob {
+    /// Read and publish a ready copy, or return false while required sequence data is still pending.
     pub fn step(&self, slot: &mut Slot, stopped: bool, updates: &mpsc::Sender<Update>) -> bool {
         if self.cancel.load(Ordering::Relaxed) {
             return true;
@@ -114,6 +128,7 @@ impl CopyJob {
         }
     }
 
+    /// Return copied text when the record/range is ready, None while scanning can supply it, or an error.
     fn read(&self, slot: &mut Slot, stopped: bool) -> io::Result<Option<String>> {
         if !slot.dataset.format().can_copy() {
             return Err(io::Error::new(
@@ -154,6 +169,7 @@ impl CopyJob {
     }
 }
 
+/// Report an operation failure with the identity needed to reject stale replies.
 fn failed(updates: &mpsc::Sender<Update>, operation_id: u64, file: usize, text: String) {
     let _ = updates.send(Update::OperationFailed {
         operation_id,
@@ -162,6 +178,7 @@ fn failed(updates: &mpsc::Sender<Update>, operation_id: u64, file: usize, text: 
     });
 }
 
+/// Read the zero-based half-open interval in 64 KiB chunks, checking cancellation between reads.
 fn copy_range(
     dataset: &mut Dataset,
     record: u64,

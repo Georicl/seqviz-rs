@@ -17,53 +17,91 @@ use std::{
     },
 };
 
+/// Wrap a SQLite error in the I/O error type exposed by the data layer.
 fn sql(error: rusqlite::Error) -> io::Error {
     io::Error::other(error)
 }
 
+/// SQLite-backed record and span storage with incremental metadata and statistics.
 pub(super) struct RecordIndex {
+    /// Connection owning the record index and its scan-step transactions.
     pub(super) db: Connection,
+    /// Detected format used to select metadata and aggregate behavior.
     pub(super) format: Format,
+    /// Whether the input extension requires protein classification.
     force_protein: bool,
+    /// Most recent in-memory record counts, scan position and error state.
     pub(super) progress: Progress,
+    /// Aggregate counters for the partial record, if one is open.
     current: Option<Current>,
+    /// Current coalesced span waiting to be written to SQLite.
     span: Option<PendingSpan>,
 }
+/// In-memory aggregates for the record currently being scanned.
 struct Current {
+    /// Zero-based ID assigned when the record begins.
     id: u64,
+    /// Sequence symbols decoded so far.
     length: u64,
+    /// Quality scores decoded so far.
     qlen: u64,
+    /// Count of G and C symbols, case-insensitive.
     gc: u64,
+    /// At most the first 1,000 sequence symbols for alphabet detection.
     sample: Vec<u8>,
+    /// Whether the record supplies sequence rather than a missing-value marker.
     has_sequence: bool,
+    /// Whether any quality scores have been observed.
     has_quality: bool,
+    /// Smallest numeric Phred score observed, initially 93.
     qmin: u8,
+    /// Largest numeric Phred score observed.
     qmax: u8,
+    /// Sum of numeric Phred scores.
     qsum: u64,
+    /// Number of scores at or above Phred 30.
     q30: u64,
+    /// Phred-score sums across 64 positional bins.
     qbins: [u64; 64],
+    /// Number of quality scores contributing to each positional bin.
     qcounts: [u64; 64],
 }
 
+/// Source span awaiting persistence, with independent decoded and raw byte coordinates.
 struct PendingSpan {
+    /// Zero-based ID of the owning record.
     record: u64,
+    /// Sequence or quality coordinate stream.
     kind: SpanKind,
+    /// Zero-based decoded coordinate of this span.
     start: u64,
+    /// Number of decoded symbols represented by the span.
     len: u64,
+    /// Logical source-byte offset of the span.
     offset: u64,
+    /// Number of source bytes to read, including text whitespace.
     raw_len: u64,
+    /// Decoder required to recover symbols from the raw span.
     encoding: SpanEncoding,
 }
 
+/// Persisted source interval and decoding metadata for one sequence or quality span.
 pub(super) struct StoredSpan {
+    /// Zero-based decoded coordinate of the span.
     pub start: u64,
+    /// Number of decoded symbols represented by the span.
     pub len: u64,
+    /// Logical source-byte offset used by range reads.
     pub offset: u64,
+    /// Number of source bytes to read before decoding.
     pub raw_len: u64,
+    /// Decoder needed for this source interval.
     pub encoding: SpanEncoding,
 }
 
 impl RecordIndex {
+    /// Open the record database and return its safe resume offset and BAM-header status.
+    /// Incomplete records are removed before resuming; completed records remain reusable.
     pub fn open(
         directory: &Path,
         key: u64,
@@ -155,10 +193,12 @@ impl RecordIndex {
         ))
     }
 
+    /// Start a write transaction for one bounded parser step.
     pub fn begin_step(&self) -> io::Result<()> {
         self.db.execute_batch("BEGIN IMMEDIATE").map_err(sql)
     }
 
+    /// Attempt to roll back the active scan transaction without masking its original error.
     pub fn rollback_step(&self) {
         let _ = self.db.execute_batch("ROLLBACK");
     }
@@ -235,6 +275,7 @@ impl RecordIndex {
         }
         Ok(())
     }
+    /// Read ordered record summaries from an inclusive zero-based ID with a bounded result size.
     pub fn records(&self, offset: u64, limit: usize) -> io::Result<Vec<RecordSummary>> {
         let mut query = self
             .db
@@ -254,6 +295,7 @@ impl RecordIndex {
             .map_err(sql)
     }
 
+    /// Load record metadata and ordered fields, deriving completed quality and GC statistics.
     pub fn record(&self, id: u64) -> io::Result<Option<RecordMeta>> {
         let mut value = self.db.query_row("SELECT id,name,header,plus,length,qlen,complete,seqtype,gc,has_seq,has_qual,qmin,qmax,qsum,q30,overview FROM records WHERE id=?", [id], |r| {
             let length: u64 = r.get(4)?;
@@ -299,6 +341,7 @@ impl RecordIndex {
             .map_err(sql)
     }
 
+    /// Run a name search with a temporary SQLite progress hook and report cancellation as interrupted.
     pub fn find_name_cancellable(
         &self,
         query: &str,
@@ -320,6 +363,7 @@ impl RecordIndex {
         }
     }
 
+    /// Run aggregate queries with a temporary SQLite progress hook, removing it before returning.
     pub fn stats_cancellable(&self, cancel: Arc<AtomicBool>) -> io::Result<Stats> {
         let signal = cancel.clone();
         self.db
@@ -336,6 +380,8 @@ impl RecordIndex {
         }
     }
 
+    /// Aggregate completed sequence-bearing records, with N50 only for FASTA and FASTQ.
+    /// GC is available only when all included records are DNA and the total length is nonzero.
     pub fn stats(&self) -> io::Result<Stats> {
         let (count, total, min, max, gc, protein, dna): (u64,u64,Option<u64>,Option<u64>,u64,u64,u64) = self.db.query_row(
             "SELECT COUNT(*),COALESCE(SUM(length),0),MIN(length),MAX(length),COALESCE(SUM(gc),0),COALESCE(SUM(seqtype=1),0),COALESCE(SUM(seqtype=0),0) FROM records WHERE complete=1 AND has_seq=1", [],
@@ -369,6 +415,7 @@ impl RecordIndex {
         })
     }
 
+    /// Insert or replace one persisted scan-state value.
     fn set_meta(&self, key: &str, value: &str) -> io::Result<()> {
         self.db
             .execute(
@@ -379,6 +426,7 @@ impl RecordIndex {
         Ok(())
     }
 
+    /// Persist an input error and update the in-memory error count and latest message.
     fn log_error(&mut self, offset: u64, message: &str) -> io::Result<()> {
         self.db
             .execute("INSERT INTO errors VALUES(?,?)", params![offset, message])
@@ -388,6 +436,7 @@ impl RecordIndex {
         Ok(())
     }
 
+    /// Assign the next zero-based record ID and initialize its incremental statistics.
     fn begin_record(&mut self, header: String, has_sequence: bool) -> io::Result<()> {
         let name = header.split_whitespace().next().unwrap_or("").to_owned();
         if name.is_empty() {
@@ -425,6 +474,7 @@ impl RecordIndex {
         Ok(())
     }
 
+    /// Replace a record's metadata fields while preserving their supplied order.
     fn store_fields(&self, id: u64, fields: &[(String, String)]) -> io::Result<()> {
         self.db
             .execute("DELETE FROM attrs WHERE record=?", [id])
@@ -441,6 +491,7 @@ impl RecordIndex {
         Ok(())
     }
 
+    /// Persist current lengths, alphabet classification and quality aggregates with the completion flag.
     fn save_current(&self, complete: bool) -> io::Result<()> {
         if let Some(c) = &self.current {
             let seqtype = if self.force_protein {
@@ -468,6 +519,7 @@ impl RecordIndex {
         Ok(())
     }
 
+    /// Flush spans, mark the current record complete and save the next safe resume offset.
     fn end_record(&mut self, next_offset: u64) -> io::Result<()> {
         self.flush_span()?;
         self.save_current(true)?;
@@ -475,6 +527,7 @@ impl RecordIndex {
         self.set_meta("resume", &next_offset.to_string())
     }
 
+    /// Delete the current record and its spans and attributes after a recoverable parse error.
     fn discard_current(&mut self) -> io::Result<()> {
         self.span = None;
         if let Some(c) = self.current.take() {
@@ -492,6 +545,8 @@ impl RecordIndex {
         Ok(())
     }
 
+    /// Accumulate decoded lengths and statistics while coalescing text spans up to one chunk.
+    /// Binary spans remain separate so packed BAM bases retain their decoding boundaries.
     fn append(
         &mut self,
         raw: &[u8],
@@ -563,6 +618,7 @@ impl RecordIndex {
         Ok(())
     }
 
+    /// Write the pending source span to SQLite and clear the span accumulator.
     fn flush_span(&mut self) -> io::Result<()> {
         if let Some(s) = self.span.take() {
             self.db
@@ -585,15 +641,18 @@ impl RecordIndex {
 }
 
 impl RecordSink for RecordIndex {
+    /// Expose the current record's decoded sequence and quality lengths to the scanner.
     fn current(&self) -> Option<RecordState> {
         self.current.as_ref().map(|c| RecordState {
             length: c.length,
             qlen: c.qlen,
         })
     }
+    /// Assign the next zero-based record ID and initialize its incremental statistics.
     fn begin_record(&mut self, header: String, has_sequence: bool) -> io::Result<()> {
         self.begin_record(header, has_sequence)
     }
+    /// Persist the current FASTQ record's complete separator line.
     fn set_plus(&mut self, plus: String) -> io::Result<()> {
         let id = self
             .current
@@ -605,6 +664,7 @@ impl RecordSink for RecordIndex {
             .map_err(sql)?;
         Ok(())
     }
+    /// Replace the current record's ordered metadata fields.
     fn set_fields(&mut self, fields: &[(String, String)]) -> io::Result<()> {
         let id = self
             .current
@@ -613,11 +673,14 @@ impl RecordSink for RecordIndex {
             .id;
         self.store_fields(id, fields)
     }
+    /// Mark the current record as lacking sequence without changing its stored fields.
     fn set_sequence_missing(&mut self) {
         if let Some(record) = &mut self.current {
             record.has_sequence = false;
         }
     }
+    /// Accumulate decoded lengths and statistics while coalescing text spans up to one chunk.
+    /// Binary spans remain separate so packed BAM bases retain their decoding boundaries.
     fn append(
         &mut self,
         raw: &[u8],
@@ -628,31 +691,39 @@ impl RecordSink for RecordIndex {
     ) -> io::Result<()> {
         self.append(raw, offset, kind, encoding, decoded)
     }
+    /// Write the pending source span to SQLite and clear the span accumulator.
     fn flush_span(&mut self) -> io::Result<()> {
         self.flush_span()
     }
+    /// Flush spans, mark the current record complete and save the next safe resume offset.
     fn end_record(&mut self, next_offset: u64) -> io::Result<()> {
         self.end_record(next_offset)
     }
+    /// Delete the current record and its spans and attributes after a recoverable parse error.
     fn discard_current(&mut self) -> io::Result<()> {
         self.discard_current()
     }
+    /// Persist an input error and update the in-memory error count and latest message.
     fn log_error(&mut self, offset: u64, message: &str) -> io::Result<()> {
         self.log_error(offset, message)
     }
+    /// Persist the logical-byte boundary for a safe restart.
     fn set_resume(&mut self, offset: u64) -> io::Result<()> {
         self.set_meta("resume", &offset.to_string())
     }
+    /// Clear the cached BAM reference dictionary before rebuilding the header.
     fn clear_references(&mut self) -> io::Result<()> {
         self.db.execute("DELETE FROM refs", []).map_err(sql)?;
         Ok(())
     }
+    /// Persist a BAM header reference with its numeric ID, name and length.
     fn add_reference(&mut self, id: i32, name: &str, length: u64) -> io::Result<()> {
         self.db
             .execute("INSERT INTO refs VALUES(?,?,?)", params![id, name, length])
             .map_err(sql)?;
         Ok(())
     }
+    /// Resolve a BAM reference ID, returning `*` for `-1` and rejecting unknown IDs.
     fn reference_name(&self, id: i32) -> io::Result<String> {
         if id == -1 {
             return Ok("*".into());
@@ -663,6 +734,7 @@ impl RecordSink for RecordIndex {
             .map_err(sql)?
             .ok_or_else(|| invalid("BAM references an unknown reference sequence"))
     }
+    /// Persist BAM-header completion and the first alignment's logical-byte offset.
     fn finish_header(&mut self, offset: u64) -> io::Result<()> {
         self.set_meta("bam_header", &offset.to_string())?;
         self.set_resume(offset)
@@ -670,12 +742,14 @@ impl RecordSink for RecordIndex {
 }
 
 // These mappings are the persisted v1 schema; enum layout is not part of that schema.
+/// Encode the sequence or quality channel using the stable SQLite schema values.
 fn kind_code(kind: SpanKind) -> i64 {
     match kind {
         SpanKind::Sequence => 0,
         SpanKind::Quality => 1,
     }
 }
+/// Encode a span decoder using the stable SQLite schema values.
 fn encoding_code(encoding: SpanEncoding) -> i64 {
     match encoding {
         SpanEncoding::Text => 0,
@@ -683,6 +757,7 @@ fn encoding_code(encoding: SpanEncoding) -> i64 {
         SpanEncoding::BamQuality => 2,
     }
 }
+/// Decode a stored span encoding, rejecting unrecognized schema values.
 fn encoding_from_code(code: i64) -> io::Result<SpanEncoding> {
     match code {
         0 => Ok(SpanEncoding::Text),

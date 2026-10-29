@@ -1,3 +1,4 @@
+//! Cell-level rendering checks for narrow VCF layouts, alignment and Unicode text.
 use super::*;
 use crate::modules::vcf::model::{
     ContigSummary, Progress, RecordSummary, VariantKind, VcfHeader, VcfRecord,
@@ -5,6 +6,7 @@ use crate::modules::vcf::model::{
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
 
+/// Construct a populated VCF view at the requested terminal size with named sample columns.
 fn fixture(width: u16, height: u16, samples: &[&str]) -> VcfView {
     let mut view = VcfView::new(
         "variants.vcf".into(),
@@ -86,9 +88,11 @@ fn fixture(width: u16, height: u16, samples: &[&str]) -> VcfView {
     view
 }
 
+/// Dispatch one unmodified key press to the test view.
 fn key(view: &mut VcfView, code: KeyCode) {
     view.key(KeyEvent::new(code, KeyModifiers::NONE));
 }
+/// Collect all cell symbols from a rendered terminal row.
 fn row(terminal: &Terminal<TestBackend>, y: u16) -> String {
     let area = terminal.backend().buffer().area;
     (0..area.width)
@@ -96,6 +100,7 @@ fn row(terminal: &Terminal<TestBackend>, y: u16) -> String {
         .collect()
 }
 
+/// Check constrained tables retain key variant columns and show the full locus in the header.
 #[test]
 fn narrow_table_prioritizes_required_columns_and_complete_coordinate() {
     let view = fixture(30, 24, &["S1"]);
@@ -112,6 +117,7 @@ fn narrow_table_prioritizes_required_columns_and_complete_coordinate() {
     assert!(row(&terminal, view.layout.rows.y).contains("123456789"));
 }
 
+/// Verify short terminals either allocate useful detail rows or keep focus in the table.
 #[test]
 fn short_layout_either_has_readable_details_or_keeps_focus_in_table() {
     for height in 8..=20 {
@@ -126,6 +132,7 @@ fn short_layout_either_has_readable_details_or_keeps_focus_in_table() {
     }
 }
 
+/// Check heading and sample TAB stops stay aligned with long values and horizontal scrolling.
 #[test]
 fn sample_heading_long_name_and_long_ad_share_columns_after_horizontal_scroll() {
     let mut view = fixture(100, 30, &["abcdefghijklmnopqrstuvwxy", "S2"]);
@@ -152,6 +159,7 @@ fn sample_heading_long_name_and_long_ad_share_columns_after_horizontal_scroll() 
     }
 }
 
+/// Verify rendering preserves combining marks and wide Unicode glyphs as complete graphemes.
 #[test]
 fn details_keep_combining_graphemes_and_wide_characters() {
     let mut view = fixture(80, 24, &["e\u{301}中S"]);
@@ -176,6 +184,7 @@ fn details_keep_combining_graphemes_and_wide_characters() {
     );
 }
 
+/// Ensure the raw panel fits its viewport while copy actions retain the complete source record.
 #[test]
 fn raw_view_clips_at_viewport_without_mutating_the_copied_record() {
     let mut view = fixture(80, 24, &["S1"]);
@@ -194,6 +203,7 @@ fn raw_view_clips_at_viewport_without_mutating_the_copied_record() {
     );
 }
 
+/// Check initial failures replace header, table and detail loading placeholders.
 #[test]
 fn initial_load_error_replaces_reading_placeholders() {
     let mut view = fixture(80, 24, &["S1"]);

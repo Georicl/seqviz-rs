@@ -18,6 +18,7 @@ pub(super) fn character_width(ch: char, column: usize, stops: &[usize]) -> usize
     }
 }
 
+/// Measure a complete grapheme at its original display column, including TAB expansion.
 pub(super) fn grapheme_width(symbol: &str, column: usize, stops: &[usize]) -> usize {
     let mut chars = symbol.chars();
     match (chars.next(), chars.next()) {

@@ -8,10 +8,12 @@ use std::{
     time::Duration,
 };
 
+/// Create the interrupted error used to stop clipboard work without a fallback.
 pub(super) fn cancelled() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "Copy cancelled")
 }
 
+/// Try platform clipboard tools in order until one succeeds or cancellation is requested.
 pub(super) fn copy(text: &str, cancel: &AtomicBool) -> io::Result<()> {
     let commands: &[(&str, &[&str])] = match env::consts::OS {
         "macos" => &[("pbcopy", &[])],
@@ -39,6 +41,7 @@ pub(super) fn copy(text: &str, cancel: &AtomicBool) -> io::Result<()> {
     Err(last_error)
 }
 
+/// Write text through a scoped pipe writer while polling and cancelling the child process.
 fn run_command(command: &str, args: &[&str], text: &str, cancel: &AtomicBool) -> io::Result<()> {
     let mut child = Command::new(command)
         .args(args)

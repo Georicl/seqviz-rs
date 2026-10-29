@@ -7,6 +7,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+/// Capture device, inode, byte length and nanosecond mtime/ctime for cache validation.
 pub(crate) fn file_identity(metadata: &fs::Metadata) -> [u64; 7] {
     [
         metadata.dev(),
@@ -18,6 +19,9 @@ pub(crate) fn file_identity(metadata: &fs::Metadata) -> [u64; 7] {
         metadata.ctime_nsec() as u64,
     ]
 }
+/// Acquire a cache writer lock or create an isolated reader directory on contention.
+///
+/// Returns the directory, a file that holds the lock, and whether the directory is private.
 pub(crate) fn lock_cache(directory: &Path, key: u64) -> io::Result<(PathBuf, File, bool)> {
     let open_lock = |directory: &Path| {
         OpenOptions::new()
@@ -35,6 +39,7 @@ pub(crate) fn lock_cache(directory: &Path, key: u64) -> io::Result<(PathBuf, Fil
     if error.kind() != io::ErrorKind::WouldBlock {
         return Err(error);
     }
+    /// Disambiguate private cache directories created by this process.
     static NEXT_READER: AtomicU64 = AtomicU64::new(0);
     loop {
         let private = directory.join(format!(

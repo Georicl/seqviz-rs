@@ -12,6 +12,7 @@ pub fn cache_directory() -> PathBuf {
     }
 }
 
+/// Locate the user config under an absolute XDG path or the home-directory fallback.
 pub fn config_path() -> Option<PathBuf> {
     config_path_from(
         env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
@@ -19,17 +20,20 @@ pub fn config_path() -> Option<PathBuf> {
     )
 }
 
+/// Resolve configuration precedence without reading or changing process environment.
 fn config_path_from(xdg: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
     xdg.filter(|p| p.is_absolute())
         .or_else(|| home.map(|p| p.join(".config")))
         .map(|p| p.join("seqviz-rs/config.toml"))
 }
 
+/// Configuration-path precedence and absolute-XDG-path tests.
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
 
+    /// Verify a relative XDG path is ignored in favour of the home configuration directory.
     #[test]
     fn xdg_config_location_obeys_absolute_path_rule() {
         let home = Some(PathBuf::from("/home/test"));

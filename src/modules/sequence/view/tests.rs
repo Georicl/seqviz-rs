@@ -1,3 +1,4 @@
+//! Sequence view regressions for coordinates, rendering and operation lifetime.
 use super::render;
 use super::*;
 use crate::modules::sequence::data::Dataset;
@@ -10,6 +11,7 @@ use ratatui::backend::TestBackend;
 use ratatui::{Terminal, layout::Rect};
 use std::{path::PathBuf, sync::atomic::Ordering};
 
+/// Fully index a fixture and seed a document view with its first snapshot and statistics.
 fn app(path: PathBuf, cache: &std::path::Path) -> SequenceView {
     let mut data = Dataset::open(&path, cache).unwrap();
     while !data.progress().complete && data.progress().error.is_none() {
@@ -53,10 +55,12 @@ fn app(path: PathBuf, cache: &std::path::Path) -> SequenceView {
     app
 }
 
+/// Construct an unmodified key event for interaction tests.
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
+/// Check drag endpoints remain sequence coordinates when terminal width changes.
 #[test]
 fn renderer_selection_and_resize_keep_sequence_coordinates() {
     let temp = tempfile::tempdir().unwrap();
@@ -113,6 +117,7 @@ fn renderer_selection_and_resize_keep_sequence_coordinates() {
     assert!(app.page.is_none());
 }
 
+/// Check SAM copying is rejected from record, sequence and information-page contexts.
 #[test]
 fn sam_copy_is_disabled_in_sequence_and_information_views() {
     let temp = tempfile::tempdir().unwrap();
@@ -129,6 +134,7 @@ fn sam_copy_is_disabled_in_sequence_and_information_views() {
     assert!(app.tab().message.contains("disabled"));
 }
 
+/// Check position input is converted to zero-based offsets and rejects a known out-of-range position.
 #[test]
 fn jump_is_one_based_and_rejects_positions_past_record() {
     let temp = tempfile::tempdir().unwrap();
@@ -143,6 +149,7 @@ fn jump_is_one_based_and_rejects_positions_past_record() {
     assert!(app.tab().message.contains("outside"));
 }
 
+/// Check edge scrolling extends selection against the target viewport before replacement data arrives.
 #[test]
 fn held_edge_drag_extends_selection_while_new_view_data_is_pending() {
     let temp = tempfile::tempdir().unwrap();
@@ -186,6 +193,7 @@ fn held_edge_drag_extends_selection_while_new_view_data_is_pending() {
     assert!(app.drag.is_none());
 }
 
+/// Check layout generations preserve copy identity until an explicit record selection cancels it.
 #[test]
 fn resizing_and_quality_visibility_preserve_active_operation_identity() {
     let temp = tempfile::tempdir().unwrap();
@@ -213,6 +221,7 @@ fn resizing_and_quality_visibility_preserve_active_operation_identity() {
     assert!(app.pending_operation.is_none());
 }
 
+/// Check each operation owns a new flag and Escape cancels only the current pending operation.
 #[test]
 fn a_new_operation_never_resets_the_old_cancellation_flag() {
     let temp = tempfile::tempdir().unwrap();
@@ -229,6 +238,7 @@ fn a_new_operation_never_resets_the_old_cancellation_flag() {
     assert!(app.pending_operation.is_none());
 }
 
+/// Check focus and quality visibility transfer between activated sequence documents.
 #[test]
 fn tab_handoff_preserves_shared_focus_and_quality_setting() {
     let shared = Rc::new(RefCell::new(SharedInteraction {

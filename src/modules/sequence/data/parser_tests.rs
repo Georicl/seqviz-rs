@@ -12,33 +12,49 @@ use std::{
     io::{self, Cursor, Read},
 };
 
+/// Decoded record captured by the parser-only test sink.
 #[derive(Default, Debug, PartialEq, Eq)]
 struct ParsedRecord {
+    /// Defline or read name delivered by the scanner.
     header: String,
+    /// Complete FASTQ separator delivered by the scanner.
     plus: String,
+    /// Decoded sequence symbols collected across spans.
     sequence: Vec<u8>,
+    /// Decoded Phred+33 quality bytes collected across spans.
     quality: Vec<u8>,
+    /// Ordered record metadata most recently supplied by the scanner.
     fields: Vec<(String, String)>,
+    /// Whether the scanner reported sequence as present.
     has_sequence: bool,
 }
 
+/// In-memory record sink that exposes parser output and restart boundaries to assertions.
 #[derive(Default)]
 struct Collector {
+    /// Partial record receiving scanner events.
     current: Option<ParsedRecord>,
+    /// Records completed in source order.
     records: Vec<ParsedRecord>,
+    /// Recoverable parser errors with logical-byte offsets.
     errors: Vec<(u64, String)>,
+    /// BAM reference IDs mapped to their names.
     references: BTreeMap<i32, String>,
+    /// Most recently reported safe logical-byte restart offset.
     resume: u64,
+    /// Logical-byte end of a completed BAM header.
     header_end: Option<u64>,
 }
 
 impl RecordSink for Collector {
+    /// Expose the lengths already collected for the current in-memory record.
     fn current(&self) -> Option<RecordState> {
         self.current.as_ref().map(|r| RecordState {
             length: r.sequence.len() as u64,
             qlen: r.quality.len() as u64,
         })
     }
+    /// Start an empty collected record and assert the preceding record was closed.
     fn begin_record(&mut self, header: String, has_sequence: bool) -> io::Result<()> {
         assert!(self.current.is_none(), "Previous record must have ended");
         self.current = Some(ParsedRecord {
@@ -48,17 +64,21 @@ impl RecordSink for Collector {
         });
         Ok(())
     }
+    /// Keep the FASTQ separator exactly as delivered by the scanner.
     fn set_plus(&mut self, plus: String) -> io::Result<()> {
         self.current.as_mut().unwrap().plus = plus;
         Ok(())
     }
+    /// Replace the collected metadata with the scanner's ordered fields.
     fn set_fields(&mut self, fields: &[(String, String)]) -> io::Result<()> {
         self.current.as_mut().unwrap().fields = fields.to_vec();
         Ok(())
     }
+    /// Record that the current alignment carries a missing sequence marker.
     fn set_sequence_missing(&mut self) {
         self.current.as_mut().unwrap().has_sequence = false;
     }
+    /// Collect decoded sequence or quality bytes without storing source spans.
     fn append(
         &mut self,
         _raw: &[u8],
@@ -78,34 +98,42 @@ impl RecordSink for Collector {
         }
         Ok(())
     }
+    /// Accept span boundaries without work because this collector has no persistent spans.
     fn flush_span(&mut self) -> io::Result<()> {
         Ok(())
     }
+    /// Move the assembled record into the completed list and retain the resume offset.
     fn end_record(&mut self, next_offset: u64) -> io::Result<()> {
         self.records.push(self.current.take().unwrap());
         self.resume = next_offset;
         Ok(())
     }
+    /// Forget a partially collected record after a recoverable parser error.
     fn discard_current(&mut self) -> io::Result<()> {
         self.current = None;
         Ok(())
     }
+    /// Collect an error message together with its logical-byte offset.
     fn log_error(&mut self, offset: u64, message: &str) -> io::Result<()> {
         self.errors.push((offset, message.to_owned()));
         Ok(())
     }
+    /// Retain the parser's latest safe restart boundary.
     fn set_resume(&mut self, offset: u64) -> io::Result<()> {
         self.resume = offset;
         Ok(())
     }
+    /// Reset the in-memory BAM reference dictionary.
     fn clear_references(&mut self) -> io::Result<()> {
         self.references.clear();
         Ok(())
     }
+    /// Remember the BAM reference name associated with a header ID.
     fn add_reference(&mut self, id: i32, name: &str, _length: u64) -> io::Result<()> {
         self.references.insert(id, name.to_owned());
         Ok(())
     }
+    /// Look up a collected reference or return `*` for the missing reference ID.
     fn reference_name(&self, id: i32) -> io::Result<String> {
         if id == -1 {
             return Ok("*".into());
@@ -115,6 +143,7 @@ impl RecordSink for Collector {
             .cloned()
             .ok_or_else(|| invalid("Unknown reference"))
     }
+    /// Record the completed BAM-header boundary as the current resume position.
     fn finish_header(&mut self, offset: u64) -> io::Result<()> {
         self.header_end = Some(offset);
         self.resume = offset;
@@ -122,6 +151,7 @@ impl RecordSink for Collector {
     }
 }
 
+/// Scan in-memory text to completion and assert that every call respects its byte budget.
 fn scan_text(bytes: &[u8], format: Format, budget: usize) -> io::Result<Collector> {
     let mut cursor = Cursor::new(bytes);
     let mut position = 0;
@@ -138,6 +168,7 @@ fn scan_text(bytes: &[u8], format: Format, budget: usize) -> io::Result<Collecto
     }
 }
 
+/// Verify FASTA deflines, comments and sequence bytes across one-byte and larger scan budgets.
 #[test]
 fn fasta_boundaries_and_content_do_not_depend_on_a_database_or_chunk_size() {
     let bytes =
@@ -153,6 +184,7 @@ fn fasta_boundaries_and_content_do_not_depend_on_a_database_or_chunk_size() {
     }
 }
 
+/// Verify wrapped FASTQ fields and marker-valued quality, and reject truncated quality.
 #[test]
 fn wrapped_fastq_preserves_separator_and_accepts_marker_characters_in_quality() {
     let bytes = b"@read details\r\nACG\r\nTN\n+read details\n@+I\n?J\n@last\nA\n+\n!";
@@ -174,6 +206,7 @@ fn wrapped_fastq_preserves_separator_and_accepts_marker_characters_in_quality() 
     );
 }
 
+/// Verify malformed SAM rows are skipped while later records and missing fields survive.
 #[test]
 fn sam_recovers_at_row_boundary_and_preserves_missing_values() {
     let bytes=b"@HD\tVN:1.6\ninvalid\trow\nread\t4\t*\t0\t0\t*\t*\t0\t0\t*\t*\nnext\t0\tchr1\t2\t60\t2M\t*\t0\t0\tAC\tII";
@@ -188,6 +221,7 @@ fn sam_recovers_at_row_boundary_and_preserves_missing_values() {
     }
 }
 
+/// Compare decoded BAM records and reference metadata with the paired SAM fixture across budgets.
 #[test]
 fn bam_scanner_uses_logical_bytes_and_reference_events_without_sqlite() {
     // The existing samtools-verified fixture supplies an independent binary oracle.

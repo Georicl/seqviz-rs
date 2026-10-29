@@ -1,3 +1,4 @@
+//! Draw sequence document panes and derive status text from already loaded snapshots.
 use super::{Focus, Page, SequenceView};
 use crate::modules::sequence::data::{Format, SeqType};
 use ratatui::Frame;
@@ -6,6 +7,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+/// Draw the record list, metadata, sequence widget and optional information-page overlay.
 pub(crate) fn draw(frame: &mut Frame, app: &SequenceView) {
     let body = app.hits.area;
     let left = app.hits.left;
@@ -199,6 +201,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &SequenceView) {
     }
 }
 
+/// Combine operation messages or scan progress with the format-appropriate keyboard hints.
 pub(crate) fn status(app: &SequenceView) -> crate::modules::view::Status {
     let status = if !app.tab().message.is_empty() {
         app.tab().message.clone()

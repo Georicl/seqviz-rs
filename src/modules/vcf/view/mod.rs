@@ -1,11 +1,17 @@
 //! One VCF document: variant navigation and lazily materialized detail pages.
+/// Translate keyboard and pointer input into VCF navigation and selection changes.
 mod events;
+/// Allocate terminal rectangles for the table and detail panels.
 mod layout;
+/// Draw bounded table cells, original-text details and overlays.
 mod render;
+/// Check terminal-cell output across narrow layouts and Unicode content.
 #[cfg(test)]
 mod render_tests;
+/// Exercise document navigation, clipboard actions and asynchronous update handling.
 #[cfg(test)]
 mod tests;
+/// Share tab expansion and grapheme geometry between rendering and selection.
 mod text;
 
 use super::{
@@ -27,13 +33,18 @@ use std::{
     },
 };
 
+/// The selected representation of the current variant record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Detail {
+    /// INFO keys and values from the selected record.
     Info,
+    /// Sample values in FORMAT order.
     Samples,
+    /// The preserved original record text.
     Raw,
 }
 impl Detail {
+    /// Return the zero-based detail-tab position.
     fn index(self) -> usize {
         match self {
             Self::Info => 0,
@@ -41,65 +52,113 @@ impl Detail {
             Self::Raw => 2,
         }
     }
+    /// Map a cyclic tab index to INFO, Samples or Raw.
     fn at(index: usize) -> Self {
         [Self::Info, Self::Samples, Self::Raw][index % 3]
     }
 }
+/// The panel receiving record or detail-row navigation commands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
+    /// Navigate variant record ordinals.
     Table,
+    /// Navigate logical rows within the active detail tab.
     Detail,
 }
+/// Full-document informational panels layered over the variant browser.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Overlay {
+    /// Keyboard/mouse usage and semantic colour explanations.
     Help,
+    /// Source path, compression and index progress.
     File,
+    /// Original header metadata displayed as reflowed text.
     Header,
 }
+/// Editable text for a position jump or contig search.
 enum Input {
+    /// Editable positive VCF position to locate.
     Position(String),
+    /// Search text used to filter the contig picker.
     Contig(String),
 }
+/// A clipboard operation identity and its shared cancellation flag.
 struct CopyOperation {
+    /// Application-wide clipboard operation ID.
     id: u64,
+    /// Flag shared with the clipboard service to stop obsolete work.
     cancel: Arc<AtomicBool>,
 }
 
+/// Per-tab VCF navigation, selection and rendering state.
+/// Request tokens reject stale snapshots while the backend owns shared source data.
 pub(crate) struct VcfView {
+    /// Original path displayed in file information.
     path: PathBuf,
+    /// Tab index attached to all requests and clipboard operations.
     file: usize,
+    /// VCF layout and semantic colour settings.
     config: VcfConfig,
+    /// Application-wide UI colours.
     theme: Theme,
+    /// Shared monotonic ID source for clipboard operations.
     clock: Arc<AtomicU64>,
+    /// Whether this tab is active and may accept request-bound updates.
     enabled: bool,
+    /// Most recently accepted backend viewport and selected record.
     snapshot: Option<Box<Snapshot>>,
+    /// Initial backend error retained separately from transient status messages.
     load_error: Option<String>,
+    /// Current contig filter; None displays all source records.
     contig: Option<String>,
+    /// Zero-based selected record ordinal within the active filter.
     selected: u64,
+    /// Zero-based first visible table ordinal within the active filter.
     start: u64,
+    /// Current viewport or position-lookup generation.
     token: u64,
+    /// Token of an outstanding position lookup that suppresses normal viewport requests.
     locating: Option<u64>,
+    /// Panel receiving row navigation.
     focus: Focus,
+    /// Current INFO, Samples or Raw detail tab.
     detail: Detail,
+    /// Zero-based selected logical detail row.
     detail_row: usize,
+    /// Zero-based first visible logical detail row.
     detail_start: usize,
+    /// Horizontal scroll offset measured in terminal display columns.
     horizontal: usize,
+    /// Inclusive selection endpoints as logical row and original character indices.
     selection: Option<((usize, usize), (usize, usize))>,
+    /// Whether a left-button text-selection drag is active.
     dragging: bool,
+    /// Initial logical text position of the current drag.
     drag_anchor: Option<(usize, usize)>,
+    /// Active help, file-information or header panel.
     overlay: Option<Overlay>,
+    /// Current position-jump or contig-search editor.
     input: Option<Input>,
+    /// Selected index in the filtered contig choices.
     picker_row: usize,
+    /// Reflowed overlay text, scroll position and selection.
     info: text_panel::State,
+    /// Prepared rectangles shared by rendering and event handling.
     layout: layout::Layout,
+    /// Whether the backend viewport must be refreshed.
     dirty: bool,
+    /// Whether the application should draw another frame.
     redraw: bool,
+    /// Transient status or current error text.
     message: String,
+    /// Current clipboard job whose completion may be accepted.
     pending_copy: Option<CopyOperation>,
+    /// Requests and application-level actions waiting to be drained.
     actions: Vec<Action>,
 }
 
 impl VcfView {
+    /// Create a dirty document view, enabling the first tab for initial loading.
     pub(crate) fn new(
         path: PathBuf,
         file: usize,
@@ -141,10 +200,12 @@ impl VcfView {
             actions: Vec::new(),
         }
     }
+    /// Queue a VCF request for the application to forward to its session worker.
     fn send(&mut self, request: Request) {
         self.actions
             .push(Action::Request(ModuleRequest::vcf(request)));
     }
+    /// Borrow the selected record only when its snapshot matches the current filter and ordinal.
     fn entry(&self) -> Option<&VcfEntry> {
         let snapshot = self.snapshot.as_ref()?;
         if snapshot.request.selected != self.selected || snapshot.request.contig != self.contig {
@@ -152,11 +213,13 @@ impl VcfView {
         }
         snapshot.selected.as_deref()
     }
+    /// Cancel the pending clipboard operation and discard its completion identity.
     fn cancel_copy(&mut self) {
         if let Some(copy) = self.pending_copy.take() {
             copy.cancel.store(true, Ordering::Relaxed);
         }
     }
+    /// Queue nonempty text with a fresh clipboard operation ID, cancelling the previous copy.
     fn copy_text(&mut self, text: String) {
         self.cancel_copy();
         if text.is_empty() {
@@ -180,6 +243,7 @@ impl VcfView {
         self.message = "Copying…".into();
         self.redraw = true;
     }
+    /// Select a filtered ordinal, keep it visible and invalidate record-specific detail state.
     fn change_record(&mut self, selected: u64) {
         self.locating = None;
         let selected = self
@@ -207,6 +271,7 @@ impl VcfView {
         self.dirty = true;
         self.redraw = true;
     }
+    /// Switch detail tabs and clear selection, scrolling and pending clipboard state.
     fn change_detail(&mut self, detail: Detail) {
         self.cancel_copy();
         self.detail = detail;
@@ -218,6 +283,7 @@ impl VcfView {
         self.drag_anchor = None;
         self.redraw = true;
     }
+    /// Count rows in the active INFO, sample or raw-record detail page.
     fn detail_len(&self) -> usize {
         let Some(entry) = self.entry() else {
             return 0;
@@ -264,6 +330,8 @@ impl VcfView {
             Detail::Raw => Vec::new(),
         }
     }
+    /// Copy the active record, detail row, selected text or overlay content.
+    /// Include the original VCF header when requested from the table or raw-record panel.
     fn copy(&mut self, with_header: bool) {
         if let Some(overlay) = self.overlay {
             let text = if overlay == Overlay::Header && self.info.selection.is_none() {
@@ -348,6 +416,7 @@ impl VcfView {
         };
         self.copy_text(text);
     }
+    /// Filter contig choices, ranking exact matches first and retaining All records.
     fn picker_options(&self) -> Vec<(Option<String>, u64)> {
         let Some(snapshot) = &self.snapshot else {
             return vec![(None, 0)];
@@ -384,6 +453,7 @@ impl VcfView {
         }
         options
     }
+    /// Return the centered contig popup, list rectangle and first visible option.
     fn picker_layout(&self) -> (Rect, Rect, usize) {
         let area = self.layout.area;
         let width = area.width.min(64);
@@ -407,6 +477,7 @@ impl VcfView {
             .saturating_sub(list.height.max(1) as usize);
         (popup, list, start)
     }
+    /// Open an informational panel with fresh text-selection and scroll state.
     fn open_overlay(&mut self, overlay: Overlay) {
         self.cancel_copy();
         self.dragging = false;
@@ -416,6 +487,7 @@ impl VcfView {
         self.redraw = true;
         self.refresh_overlay();
     }
+    /// Rebuild and reflow help, file information or original-header display lines.
     fn refresh_overlay(&mut self) {
         let Some(overlay) = self.overlay else {
             return;
@@ -484,6 +556,7 @@ impl VcfView {
         let area = layout::inset(self.layout.area);
         self.info.reflow(lines, area.width, area.height);
     }
+    /// Queue a new viewport generation unless a position lookup is still pending.
     fn request(&mut self) {
         if self.locating.is_some() {
             self.dirty = false;
@@ -504,6 +577,7 @@ impl VcfView {
 }
 
 impl DocumentView for VcfView {
+    /// Recompute layout and keep selected table/detail rows visible after a resize.
     fn prepare(&mut self, area: Rect) {
         let next = layout::calculate(area, self.config.detail_rows);
         let layout_changed =
@@ -539,34 +613,45 @@ impl DocumentView for VcfView {
             self.refresh_overlay();
         }
     }
+    /// Render this document using its prepared layout.
     fn draw(&self, frame: &mut Frame) {
         render::draw(frame, self);
     }
+    /// Dispatch a keyboard event to VCF navigation and input handling.
     fn key(&mut self, event: crossterm::event::KeyEvent) {
         self.key_event(event);
     }
+    /// Dispatch a pointer event to panel navigation and text selection.
     fn mouse(&mut self, event: crossterm::event::MouseEvent) {
         self.mouse_event(event);
     }
+    /// Leave timer-driven view state unchanged; this view has no periodic UI work.
     fn tick(&mut self) {}
+    /// Keep application shortcuts inside an active input prompt or overlay.
     fn captures_input(&self) -> bool {
         self.input.is_some() || self.overlay.is_some()
     }
+    /// Keep tab-strip clicks captured while a modal prompt or overlay is open.
     fn captures_tab_mouse(&self) -> bool {
         self.input.is_some() || self.overlay.is_some()
     }
+    /// Report whether the current navigation or layout needs a backend viewport request.
     fn is_dirty(&self) -> bool {
         self.dirty
     }
+    /// Report whether visual state has changed since the last completed frame.
     fn needs_redraw(&self) -> bool {
         self.redraw
     }
+    /// Clear the redraw flag after the application renders this view.
     fn did_draw(&mut self) {
         self.redraw = false;
     }
+    /// Submit the current viewport through the document action queue.
     fn request_view(&mut self) {
         self.request();
     }
+    /// Apply matching VCF snapshots and lookup results, ignoring stale request generations.
     fn update(&mut self, update: ModuleUpdate) {
         let ModuleUpdate::Vcf(update) = update else {
             return;
@@ -642,15 +727,18 @@ impl DocumentView for VcfView {
             _ => {}
         }
     }
+    /// Drain queued requests, clipboard operations and background-cancellation changes.
     fn actions(&mut self) -> Vec<Action> {
         std::mem::take(&mut self.actions)
     }
+    /// Enable updates for this tab and request a fresh snapshot and redraw.
     fn activate(&mut self) {
         self.enabled = true;
         self.dirty = true;
         self.redraw = true;
         self.actions.push(Action::BackgroundCancelled(false));
     }
+    /// Cancel transient selection, input, lookup and clipboard state when leaving this tab.
     fn deactivate(&mut self) {
         self.cancel_copy();
         self.locating = None;
@@ -662,6 +750,7 @@ impl DocumentView for VcfView {
         self.drag_anchor = None;
         self.actions.push(Action::BackgroundCancelled(true));
     }
+    /// Describe current navigation and scan state for the application status bar.
     fn status(&self) -> Status {
         let message = if !self.message.is_empty() {
             self.message.clone()
@@ -686,6 +775,7 @@ impl DocumentView for VcfView {
         };
         Status { message, hints: "? help  c contig  : position  Enter details  1/2/3 detail tab  y copy  Tab file  q quit".into() }
     }
+    /// Expose the current position or contig editor to the application prompt widget.
     fn input_prompt(&self) -> Option<InputPrompt<'_>> {
         match &self.input {
             Some(Input::Position(text)) => Some(InputPrompt {
@@ -699,9 +789,11 @@ impl DocumentView for VcfView {
             None => None,
         }
     }
+    /// Report whether a selected record or informational overlay is available to copy.
     fn can_copy(&self) -> bool {
         self.entry().is_some() || self.overlay.is_some()
     }
+    /// Accept completion only for this active tab and its uncancelled copy operation.
     fn accepts_copy(&self, id: u64) -> bool {
         self.enabled
             && self
@@ -709,6 +801,7 @@ impl DocumentView for VcfView {
                 .as_ref()
                 .is_some_and(|op| op.id == id && !op.cancel.load(Ordering::Relaxed))
     }
+    /// Show the matching clipboard completion message and request a redraw.
     fn copy_finished(&mut self, id: u64, message: String) {
         if self.accepts_copy(id) {
             self.pending_copy = None;
@@ -716,6 +809,7 @@ impl DocumentView for VcfView {
             self.redraw = true;
         }
     }
+    /// Invalidate viewport geometry and drag selections while retaining navigation context.
     fn resized(&mut self) {
         self.dirty = true;
         self.redraw = true;
@@ -726,6 +820,7 @@ impl DocumentView for VcfView {
     }
 }
 impl Drop for VcfView {
+    /// Cancel an outstanding clipboard operation when the document is removed.
     fn drop(&mut self) {
         self.cancel_copy();
     }

@@ -1,30 +1,50 @@
 //! Terminal geometry and coordinate mapping. This module performs no I/O.
 use ratatui::layout::Rect;
 
+/// Prepared terminal rectangles and sequence-to-cell geometry for rendering and hit testing.
 #[derive(Default)]
 pub(crate) struct Layout {
+    /// Complete document body rectangle supplied by the application shell.
     pub area: Rect,
+    /// Record-list pane including its border.
     pub left: Rect,
+    /// Sequence pane including its border.
     pub right: Rect,
+    /// Inner record-list rectangle used for row rendering and pointer selection.
     pub list: Rect,
+    /// Sequence-pane interior before reserving the record-details rows.
     pub sequence_inner: Rect,
+    /// Base and quality rows including the coordinate gutter.
     pub sequence: Rect,
+    /// Number of rows reserved for record metadata above the sequence.
     pub details: u16,
+    /// Sequence characters available per row after the gutter.
     pub bases_per_line: usize,
+    /// Number of complete base rows, excluding paired quality rows.
     pub sequence_rows: usize,
+    /// Terminal rows occupied by a base row and its optional quality row.
     pub stride: u16,
+    /// Columns reserved for one-based sequence positions.
     pub gutter: u16,
+    /// Inner rectangle available to an information-page overlay.
     pub info: Rect,
+    /// Whether the body is below the minimum supported dimensions.
     pub too_small: bool,
 }
 
+/// Record metadata and display settings that determine sequence row geometry.
 pub(crate) struct SequenceLayout {
+    /// Currently indexed sequence length, used to size the coordinate gutter.
     pub known_length: Option<u64>,
+    /// Zero-based sequence offset requested at the top of the viewport.
     pub start: u64,
+    /// Whether the current record supplies quality characters.
     pub has_quality: bool,
+    /// Whether the user has enabled aligned quality-character rows.
     pub show_quality: bool,
 }
 
+/// Allocate record and sequence panes, reserving coordinate and optional quality-row space.
 pub(crate) fn calculate(area: Rect, view: SequenceLayout) -> Layout {
     if area.width < 30 || area.height < 5 {
         return Layout {
@@ -75,6 +95,7 @@ pub(crate) fn calculate(area: Rect, view: SequenceLayout) -> Layout {
     }
 }
 
+/// Remove a one-cell border from a rectangle with saturating inner dimensions.
 fn inset(area: Rect) -> Rect {
     Rect::new(
         area.x + 1,

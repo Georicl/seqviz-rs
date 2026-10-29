@@ -17,14 +17,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Restores cooked input, mouse reporting and the main screen when the session exits.
 struct TerminalGuard;
 impl Drop for TerminalGuard {
+    /// Attempt terminal restoration even when the event loop returns an error.
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
     }
 }
 
+/// Own the terminal session and interleave input, worker updates, timed ticks and redraws.
 pub fn run(paths: Vec<PathBuf>, config: Config) -> io::Result<()> {
     let worker = Worker::start(paths.clone(), config::cache_directory());
     let mut app = App::new(paths, config, worker);
@@ -63,6 +66,7 @@ pub fn run(paths: Vec<PathBuf>, config: Config) -> io::Result<()> {
     Ok(())
 }
 
+/// Write a prepared clipboard escape on the UI thread and flush terminal output.
 pub fn write_osc52(payload: &str) -> io::Result<()> {
     let mut output = io::stdout().lock();
     if !output.is_terminal() {
@@ -74,6 +78,7 @@ pub fn write_osc52(payload: &str) -> io::Result<()> {
     output.write_all(payload.as_bytes())?;
     output.flush()
 }
+/// Read stdout's terminal width, falling back to 80 columns when unavailable.
 pub fn terminal_width() -> usize {
     terminal_size::terminal_size_of(io::stdout())
         .map(|(terminal_size::Width(width), _)| usize::from(width))

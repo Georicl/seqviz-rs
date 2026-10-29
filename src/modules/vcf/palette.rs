@@ -6,6 +6,7 @@ use ratatui::{
     text::Span,
 };
 
+/// Use the foreground for reference allele 0 and cycle configured colours for ALT alleles.
 pub(crate) fn allele_color(index: usize, config: &VcfConfig, theme: &Theme) -> Color {
     if index == 0 || config.allele_colors.is_empty() {
         theme.foreground
@@ -14,6 +15,7 @@ pub(crate) fn allele_color(index: usize, config: &VcfConfig, theme: &Theme) -> C
     }
 }
 
+/// Distinguish PASS, missing filters and named filtering failures.
 pub(crate) fn filter_color(value: &str, config: &VcfConfig) -> Color {
     match value {
         "PASS" => config.pass_color,
@@ -47,6 +49,7 @@ pub(crate) fn genotype(value: &str, config: &VcfConfig, theme: &Theme) -> Vec<Sp
     spans
 }
 
+/// Style a whole allele number, missing marker or genotype separator.
 fn genotype_token(value: &str, digits: bool, config: &VcfConfig, theme: &Theme) -> Span<'static> {
     let color = if digits {
         value
@@ -61,6 +64,7 @@ fn genotype_token(value: &str, digits: bool, config: &VcfConfig, theme: &Theme) 
     Span::styled(value.to_owned(), Style::default().fg(color))
 }
 
+/// Colour each displayed base using the configured nucleotide palette.
 pub(crate) fn nucleotides(value: &str, config: &VcfConfig) -> Vec<Span<'static>> {
     value
         .chars()
@@ -109,10 +113,12 @@ pub(crate) fn allele_depth(
     spans
 }
 
+/// Check allele identity across genotype text and depth-bar segments.
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Verify multi-digit genotypes and sparse AD values keep their original allele colours.
     #[test]
     fn complete_gt_tokens_and_ad_segments_share_allele_identity() {
         let config = VcfConfig::default();
