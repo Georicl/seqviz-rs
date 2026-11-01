@@ -532,7 +532,9 @@ fn view(file: usize, token: u64, selected: u64) -> Request {
         file,
         token,
         contig: None,
+        query: Default::default(),
         selected,
+        anchor: None,
         start: selected,
         count: 2,
     })
@@ -551,6 +553,7 @@ fn backend_coalesces_views_and_preserves_pause_operation_barrier() {
         SessionFiles::new(vec![directory.path().join("missing.vcf"), path]),
         cache,
         send,
+        Default::default(),
     );
     assert!(
         backend.handle_requests(
@@ -610,7 +613,12 @@ fn backend_locates_contig_ordinal_with_request_identity() {
     );
     let (_directory, path, cache) = fixture(text.as_bytes());
     let (send, receive) = mpsc::channel();
-    let mut backend = Backend::new(SessionFiles::new(vec![path]), cache, send);
+    let mut backend = Backend::new(
+        SessionFiles::new(vec![path]),
+        cache,
+        send,
+        Default::default(),
+    );
     backend.handle_requests(
         vec![
             view(0, 1, 0),
@@ -619,6 +627,7 @@ fn backend_locates_contig_ordinal_with_request_identity() {
                 token: 2,
                 contig: "chr1".into(),
                 position: 20,
+                query: Default::default(),
             },
         ]
         .into_iter(),
@@ -637,6 +646,7 @@ fn backend_locates_contig_ordinal_with_request_identity() {
         token: 3,
         contig: "chr1".into(),
         position: 21,
+        query: Default::default(),
     }));
     backend.tick();
     assert!(receive.try_iter().any(|update| matches!(
@@ -662,7 +672,12 @@ fn backend_locate_preserves_scan_and_cache_errors() {
         let text = format!("{HEADER}{}{suffix}", record("chr1", 10));
         let (_directory, path, cache) = fixture(text.as_bytes());
         let (send, receive) = mpsc::channel();
-        let mut backend = Backend::new(SessionFiles::new(vec![path]), cache.clone(), send);
+        let mut backend = Backend::new(
+            SessionFiles::new(vec![path]),
+            cache.clone(),
+            send,
+            Default::default(),
+        );
         backend.handle_requests(std::iter::once(view(0, 1, 0)));
         if cache_failure {
             let db = rusqlite::Connection::open(database(&cache)).unwrap();
@@ -679,6 +694,7 @@ fn backend_locate_preserves_scan_and_cache_errors() {
             token: 2,
             contig: "chr1".into(),
             position: 11,
+            query: Default::default(),
         }));
         backend.tick();
         let failure = receive
@@ -709,7 +725,12 @@ fn backend_locate_preserves_scan_and_cache_errors() {
 fn backend_locate_failures_keep_file_and_request_token() {
     let (_directory, path, cache) = fixture(HEADER.as_bytes());
     let (send, receive) = mpsc::channel();
-    let mut backend = Backend::new(SessionFiles::new(vec![path]), cache, send);
+    let mut backend = Backend::new(
+        SessionFiles::new(vec![path]),
+        cache,
+        send,
+        Default::default(),
+    );
     backend.handle_requests(
         vec![
             view(0, 1, 0),
@@ -718,6 +739,7 @@ fn backend_locate_failures_keep_file_and_request_token() {
                 token: 7,
                 contig: "missing".into(),
                 position: 20,
+                query: Default::default(),
             },
         ]
         .into_iter(),
@@ -729,7 +751,233 @@ fn backend_locate_failures_keep_file_and_request_token() {
         token: 8,
         contig: "chr1".into(),
         position: u64::MAX,
+        query: Default::default(),
     }));
     backend.tick();
     assert!(receive.try_iter().any(|update| matches!(update, Update::LocateFailed {file:0, token:8, text} if text.contains("Position exceeds"))));
+}
+
+/// Small unsorted multi-sample source with QUAL ties, every FILTER state and partial GT calls.
+fn query_fixture() -> (TempDir, PathBuf, PathBuf) {
+    let raw = format!(
+        "##fileformat=VCFv4.3\n##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\n\
+chr1\t30\trsA\tA\tT\t40\tPASS\t.\tGT\t0/1\t./.\n\
+chr1\t10\trsB\tA\tAT\t10\tq10\t.\tGT\t0/.\t1/1\n\
+chr2\t20\t{}needle\tA\tC\t.\t.\t.\tGT\t././.\t.\n\
+chr1\t20\trsC\tAT\tA\t40\tPASS\t.\tDP\t3\t4\n\
+chr1\t20\trsD\tA\tG\t40\tPASS\t.\tGT\t0|1\t0\n",
+        "long_identifier_".repeat(8)
+    );
+    fixture(raw.as_bytes())
+}
+
+/// Filtering and stable sort ordinals refer to complete IDs and the correct raw source record.
+#[test]
+fn queries_filter_sort_and_materialize_stable_source_ids() {
+    use super::query::Query;
+    let (_directory, path, cache) = query_fixture();
+    let mut data = Dataset::open(&path, &cache).unwrap();
+    finish(&mut data);
+    let query = Query::parse("pass qual>=20 sort=-qual").unwrap();
+    assert_eq!(data.query_total(None, &query).unwrap(), 3);
+    let rows = data.query_rows(None, &query, 1, 20).unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.id, row.ordinal))
+            .collect::<Vec<_>>(),
+        [(3, 1), (4, 2)]
+    );
+    assert_eq!(
+        data.query_entry(None, &query, 1)
+            .unwrap()
+            .unwrap()
+            .record
+            .ids,
+        ["rsC"]
+    );
+    let query = Query::parse("sort=pos").unwrap();
+    assert_eq!(
+        data.query_rows(None, &query, 0, 10)
+            .unwrap()
+            .iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+        [1, 3, 4, 0, 2]
+    );
+    let query = Query::parse("sort=qual").unwrap();
+    assert_eq!(
+        data.query_rows(None, &query, 0, 10)
+            .unwrap()
+            .iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+        [1, 0, 3, 4, 2]
+    );
+    let query = Query::parse("id=needle").unwrap();
+    assert_eq!(data.query_rows(None, &query, 0, 10).unwrap()[0].id, 2);
+    let query = Query::parse("contig=chr1 type=SNP start=20 end=30").unwrap();
+    assert_eq!(
+        data.query_rows(None, &query, 0, 10)
+            .unwrap()
+            .iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+        [0, 4]
+    );
+    assert_eq!(data.query_total(Some("chr2"), &query).unwrap(), 0);
+    assert_eq!(
+        data.query_total(None, &Query::parse("id=';DROP").unwrap())
+            .unwrap(),
+        0
+    );
+    for sort in [
+        "source", "-source", "pos", "-pos", "qual", "-qual", "type", "-type",
+    ] {
+        let query = Query::parse(&format!("sort={sort}")).unwrap();
+        for contig in [None, Some("chr1")] {
+            for row in data.query_rows(contig, &query, 0, 10).unwrap() {
+                assert_eq!(
+                    data.query_ordinal(contig, &query, row.id).unwrap(),
+                    Some(row.ordinal),
+                    "{sort} {:?} source {}",
+                    contig,
+                    row.id
+                );
+            }
+        }
+    }
+}
+
+/// Position lookup returns the ordinal in the active query order, not the source contig ordinal.
+#[test]
+fn queried_location_matches_the_filtered_and_sorted_viewport() {
+    use super::query::Query;
+    let (_directory, path, cache) = query_fixture();
+    let mut data = Dataset::open(&path, &cache).unwrap();
+    finish(&mut data);
+    let query = Query::parse("sort=-qual").unwrap();
+    let selected = data.query_locate("chr1", &query, 20).unwrap().unwrap();
+    assert_eq!(selected, 1);
+    assert_eq!(
+        data.query_entry(Some("chr1"), &query, selected)
+            .unwrap()
+            .unwrap()
+            .record
+            .ids,
+        ["rsC"]
+    );
+    let query = Query::parse("qual<=20").unwrap();
+    assert_eq!(data.query_locate("chr1", &query, 20).unwrap(), Some(0));
+    let query = Query::parse("type=MNV").unwrap();
+    assert_eq!(data.query_locate("chr1", &query, 20).unwrap(), None);
+}
+
+/// SQL reports separate missing/PASS FILTER, missing QUAL, partial GT and absent GT fields.
+#[test]
+fn queried_statistics_preserve_quality_and_genotype_denominators() {
+    use super::query::Query;
+    use std::sync::{Arc, atomic::AtomicBool};
+    let (_directory, path, cache) = query_fixture();
+    let mut data = Dataset::open(&path, &cache).unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let partial = data
+        .statistics(None, &Query::default(), Arc::clone(&cancel))
+        .unwrap();
+    assert!(!partial.complete);
+    assert_eq!(partial.records, 0);
+    finish(&mut data);
+    let all = data
+        .statistics(None, &Query::default(), Arc::clone(&cancel))
+        .unwrap();
+    assert!(all.complete);
+    assert_eq!(
+        (all.records, all.pass, all.filter_missing, all.filtered),
+        (5, 3, 1, 1)
+    );
+    assert_eq!(
+        (all.qual_min, all.qual_mean, all.qual_max),
+        (Some(10.0), Some(32.5), Some(40.0))
+    );
+    assert_eq!(all.qual_bins, [1, 1, 0, 3, 0]);
+    assert_eq!(
+        (
+            all.called_genotypes,
+            all.missing_genotypes,
+            all.partial_genotypes,
+            all.unavailable_genotypes
+        ),
+        (4, 3, 1, 2)
+    );
+    assert_eq!(
+        all.kinds
+            .iter()
+            .find(|(kind, _)| *kind == VariantKind::Snv)
+            .unwrap()
+            .1,
+        3
+    );
+    let query = Query::parse("pass type=SNV").unwrap();
+    let filtered = data.statistics(None, &query, cancel).unwrap();
+    assert_eq!(
+        (
+            filtered.records,
+            filtered.called_genotypes,
+            filtered.missing_genotypes
+        ),
+        (2, 3, 1)
+    );
+}
+
+/// A cancelled aggregate never leaves an interrupt hook affecting later index queries.
+#[test]
+fn cancelled_statistics_leave_the_dataset_usable() {
+    use super::query::Query;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let (_directory, path, cache) = query_fixture();
+    let mut data = Dataset::open(&path, &cache).unwrap();
+    finish(&mut data);
+    let cancel = Arc::new(AtomicBool::new(true));
+    assert_eq!(
+        data.statistics(None, &Query::default(), Arc::clone(&cancel))
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::Interrupted
+    );
+    cancel.store(false, Ordering::Relaxed);
+    assert_eq!(
+        data.statistics(None, &Query::default(), cancel)
+            .unwrap()
+            .records,
+        5
+    );
+    assert_eq!(
+        data.query_rows(None, &Query::default(), 0, 10)
+            .unwrap()
+            .len(),
+        5
+    );
+
+    let worker = Arc::new(AtomicBool::new(true));
+    data.set_query_cancel(Arc::clone(&worker));
+    assert_eq!(
+        data.cancellable(|data| data.query_rows(None, &Query::parse("sort=-qual").unwrap(), 0, 10))
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::Interrupted
+    );
+    assert_eq!(
+        data.statistics(None, &Query::default(), Arc::new(AtomicBool::new(false)))
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::Interrupted
+    );
+    worker.store(false, Ordering::Relaxed);
+    assert_eq!(
+        data.cancellable(|data| data.query_total(None, &Query::default()))
+            .unwrap(),
+        5
+    );
 }

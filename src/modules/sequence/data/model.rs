@@ -134,7 +134,48 @@ pub struct Progress {
     pub error: Option<String>,
 }
 
-/// File aggregates computed from completed records that contain sequence.
+/// One fixed histogram interval, including empty intervals for comparable displays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistogramBin {
+    /// Human-readable interval; brackets describe inclusive and exclusive boundaries.
+    pub label: &'static str,
+    /// Number of completed records whose measurement lies in this interval.
+    pub count: u64,
+}
+
+/// Quality aggregates over completed records containing at least one quality score.
+#[derive(Debug, Clone, Default)]
+pub struct FileQualityStats {
+    /// Number of completed records contributing quality scores.
+    pub records: u64,
+    /// Total number of quality scores, used to weight the file-wide mean and Q30.
+    pub scores: u64,
+    /// Mean numeric Phred score across all contributing quality scores.
+    pub mean: f64,
+    /// Percentage of contributing scores at or above Phred 30.
+    pub q30: f64,
+}
+
+/// FLAG-based counts over completed SAM/BAM alignment records, including missing SEQ.
+#[derive(Debug, Clone, Default)]
+pub struct MappingStats {
+    /// Number of completed alignment records with a FLAG value.
+    pub alignments: u64,
+    /// Alignments whose unmapped flag (0x4) is absent.
+    pub mapped: u64,
+    /// Alignments whose unmapped flag (0x4) is present.
+    pub unmapped: u64,
+    /// Alignments with neither the secondary (0x100) nor supplementary (0x800) flag.
+    pub primary: u64,
+    /// Alignments carrying the secondary flag (0x100).
+    pub secondary: u64,
+    /// Alignments carrying the supplementary flag (0x800).
+    pub supplementary: u64,
+    /// Alignments carrying the duplicate flag (0x400), without deduplication.
+    pub duplicate: u64,
+}
+
+/// File-wide scan counts and aggregates over completed applicable records.
 #[derive(Debug, Clone, Default)]
 pub struct Stats {
     /// Number of all indexed records, including a current partial record.
@@ -159,4 +200,14 @@ pub struct Stats {
     pub complete: bool,
     /// Number of recorded input errors.
     pub errors: u64,
+    /// Length histogram over completed sequence-bearing records, including empty sequences.
+    pub length_distribution: Vec<HistogramBin>,
+    /// Per-record GC-percentage histogram over completed nonempty DNA sequences only.
+    pub gc_distribution: Vec<HistogramBin>,
+    /// Per-record mean Phred histogram over completed records with quality scores.
+    pub quality_distribution: Vec<HistogramBin>,
+    /// File-wide quality aggregates, absent when no completed record has quality scores.
+    pub quality: Option<FileQualityStats>,
+    /// SAM/BAM FLAG summary; absent for sequence formats without alignment metadata.
+    pub mapping: Option<MappingStats>,
 }

@@ -13,14 +13,19 @@ mod model;
 /// Storage-independent scanner tests across format and chunk boundaries.
 #[cfg(test)]
 mod parser_tests;
+/// SQL record windows and position-to-source identity mapping.
+mod query;
 /// Logical-byte parser input and the record-sink contract.
 mod scan;
+/// Fixed-size distribution and alignment-summary queries.
+mod statistics;
 /// Dataset integration tests for indexes, range reads and source changes.
 #[cfg(test)]
 mod tests;
 /// Incremental FASTA, FASTQ and SAM parsing.
 mod text;
 
+use super::query::RecordQuery;
 use crate::core::{cache, source::Source};
 use cache::{file_identity, lock_cache};
 use classify::detect_format;
@@ -28,6 +33,7 @@ use classify::detect_format;
 use classify::detect_type;
 use index::RecordIndex;
 pub use model::*;
+pub use query::RecordPage;
 use scan::{ScanInput, SpanEncoding, SpanKind};
 use std::{
     collections::hash_map::DefaultHasher,
@@ -86,6 +92,33 @@ pub struct Dataset {
 }
 
 impl Dataset {
+    /// Scope cooperative SQLite cancellation to read-only queries, clearing the hook before return.
+    /// Incremental parser writes run outside this scope so cancellation cannot interrupt a scan commit.
+    pub(crate) fn cancellable<T>(
+        &mut self,
+        cancel: Arc<AtomicBool>,
+        operation: impl FnOnce(&mut Self) -> io::Result<T>,
+    ) -> io::Result<T> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Sequence query cancelled",
+            ));
+        }
+        let signal = Arc::clone(&cancel);
+        self.index
+            .db
+            .progress_handler(1000, Some(move || signal.load(Ordering::Relaxed)));
+        let result = operation(self);
+        self.index.db.progress_handler(0, None::<fn() -> bool>);
+        if cancel.load(Ordering::Relaxed) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Sequence query cancelled",
+            ));
+        }
+        result
+    }
     /// Open the source and reuse its index, resuming incomplete scans at a record boundary.
     /// Canonical path, file identity and schema version select the cache; contending writers
     /// receive a private cache. `.faa` and `.pep` inputs are classified as protein.
@@ -190,6 +223,32 @@ impl Dataset {
     pub fn records(&self, offset: u64, limit: usize) -> io::Result<Vec<RecordSummary>> {
         self.check_source()?;
         self.index.records(offset, limit)
+    }
+    /// Return one bounded filtered/sorted window; result positions never replace source record IDs.
+    pub fn query_records(
+        &self,
+        query: &RecordQuery,
+        offset: u64,
+        limit: usize,
+    ) -> io::Result<RecordPage> {
+        self.check_source()?;
+        self.index.query_records(query, offset, limit)
+    }
+    /// Locate a stable source record ID in the current filtered and sorted result.
+    pub fn record_position(&self, query: &RecordQuery, id: u64) -> io::Result<Option<u64>> {
+        self.check_source()?;
+        self.index.record_position(query, id)
+    }
+    /// Search record names within the query from an inclusive result position, without wrapping.
+    pub fn find_name_in_query(
+        &self,
+        query: &RecordQuery,
+        name: &str,
+        after: u64,
+        cancel: Arc<AtomicBool>,
+    ) -> io::Result<Option<u64>> {
+        self.check_source()?;
+        self.index.find_name_in_query(query, name, after, cancel)
     }
     /// Read indexed metadata for a zero-based record ID, or `None` if absent.
     pub fn record(&self, id: u64) -> io::Result<Option<RecordMeta>> {

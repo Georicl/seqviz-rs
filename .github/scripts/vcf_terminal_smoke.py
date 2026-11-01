@@ -342,6 +342,63 @@ def empty_and_errors(paths):
             session.close()
 
 
+def query_samples_and_statistics(vcf, records):
+    """Keep record identity, sample columns and statistics consistent through real input."""
+    session = Session("query-samples-statistics", [vcf])
+    try:
+        session.wait(lambda: "chr1:100" in session.text() and "Indexed" in session.text(),
+                     "indexed-source-ready")
+        session.send(b"fpass qual>=30\r")
+        session.wait(lambda: "record 1 / 3" in session.text(), "filtered-record-count")
+        session.copy(records[0].encode(), "filtered-first-source-record")
+
+        # Source -> ascending position -> descending position. Only positions 100, 400,
+        # and 700 are PASS with QUAL >=30; ties must never substitute another raw row.
+        session.send(b"ss")
+        session.wait(lambda: "chr1:700" in session.text() and "sort=-pos" in session.text(),
+                     "descending-position-order")
+        session.copy(records[6].encode(), "sorted-copy-keeps-original-record")
+
+        session.send(b"/SAMPLE_017\r")
+        session.wait(lambda: "SAMPLE_017" in session.text(), "sample-name-navigation")
+        session.send(b"pP")
+        session.wait(lambda: "pinned only" in session.text(), "pinned-sample-view")
+        session.check("SAMPLE_017" in session.text() and "SAMPLE_016" not in session.text(),
+                      "pinned-view-retains-source-sample")
+        session.send(b"FDP,GT\r")
+        session.copy(b"SAMPLE\tDP\tGT\nSAMPLE_017\t10\t1/2",
+                     "pinned-sample-copy-with-reordered-format")
+        sample_y, sample_x = session.row("SAMPLE_017")
+        session.click(sample_x, sample_y)
+        session.copy(b"SAMPLE\tDP\tGT\nSAMPLE_017\t10\t1/2",
+                     "pinned-sample-mouse-copy-keeps-source-index")
+
+        session.send(b"\x1b[14~")
+        session.wait(lambda: "Matching records: 3" in session.text(), "filtered-statistics-ready")
+        statistics = session.copy_payload("filtered-statistics")
+        # Three retained records have QUAL=75 and FILTER=PASS. Each contains 17 fully
+        # called genotypes plus one partially missing genotype across its 18 samples.
+        expected = [b"Matching records: 3", b"PASS: 3",
+                    b"QUAL min / mean / max: 75.00 / 75.00 / 75.00",
+                    b"Fully called: 51", b"Partially missing: 3"]
+        session.check(all(value in statistics for value in expected)
+                      and b"pass qual>=30" in statistics,
+                      "statistics-use-filtered-records-and-all-samples", repr(statistics))
+        session.send(b"qP")
+        session.copy(b"SAMPLE\tDP\tGT\nSAMPLE_017\t10\t1/2",
+                     "leaving-statistics-keeps-sample-and-format-selection")
+
+        expression = "pass qual>=30 sort=-pos"
+        session.send(b"f" + b"\x7f" * len(expression) + b"\r\x1b")
+        session.wait(lambda: "record 1 / 10" in session.text() and "chr1:100" in session.text(),
+                     "cleared-filter-restores-source-order")
+        session.copy(records[0].encode(), "cleared-filter-original-record")
+        session.send(b"q")
+        session.wait(lambda: session.process.poll() is not None, "normal-exit")
+    finally:
+        session.close()
+
+
 def main():
     if not BINARY.is_file() or not os.access(BINARY, os.X_OK):
         raise SystemExit(f"Build sq first, or set SQ_BIN: {BINARY}")
@@ -350,6 +407,7 @@ def main():
         ("geometry", lambda: geometry([vcf, fasta], records)),
         ("interactions", lambda: interactions(vcf, compressed, fasta, header, records, values, long_value)),
         ("empty-and-errors", lambda: empty_and_errors([empty, zero, bad])),
+        ("query-samples-statistics", lambda: query_samples_and_statistics(vcf, records)),
     ]:
         try:
             action()

@@ -1,9 +1,10 @@
 //! VCF viewport requests and snapshots retain only one selected raw record.
 use super::model::{ContigSummary, Progress, RecordSummary, VcfEntry, VcfHeader};
-use std::sync::Arc;
+use super::{query::Query, statistics::Statistics};
+use std::sync::{Arc, atomic::AtomicBool};
 
 /// Identify a tab, request generation and bounded region of the variant table.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ViewRequest {
     /// Tab index used to route the response.
     pub file: usize,
@@ -11,8 +12,13 @@ pub struct ViewRequest {
     pub token: u64,
     /// Contig filter, or None to show source order across all contigs.
     pub contig: Option<String>,
+    /// Additional indexed predicates and ordering, independent of source IDs.
+    pub query: Query,
     /// Zero-based ordinal within the current filter; equals the source ID without a filter.
     pub selected: u64,
+    /// Stable source ID retained while indexing inserts earlier sorted rows.
+    /// Explicit record navigation or a changed filter clears this anchor.
+    pub anchor: Option<u64>,
     /// Zero-based first table ordinal within the current filter.
     pub start: u64,
     /// Requested number of table rows, capped by the data layer.
@@ -57,6 +63,21 @@ pub enum Request {
         contig: String,
         /// Requested genomic coordinate in VCF POS units.
         position: u64,
+        /// Current filters and ordering used to return the matching viewport ordinal.
+        query: Query,
+    },
+    /// Calculate one cancellable report over the currently indexed matching records.
+    Statistics {
+        /// Tab that requested the report.
+        file: usize,
+        /// Independent report identity used to reject stale results.
+        token: u64,
+        /// Active contig-picker selection.
+        contig: Option<String>,
+        /// Predicates defining the report's matching records.
+        query: Query,
+        /// Cooperative cancellation shared with the originating page.
+        cancel: Arc<AtomicBool>,
     },
     /// Pause indexing and cancel a pending lookup for this tab index.
     Cancel(usize),
@@ -69,6 +90,24 @@ pub enum Request {
 /// Backend responses carrying the originating tab or viewport request identity.
 #[derive(Clone, Debug)]
 pub enum Update {
+    /// A report for one explicit statistics request.
+    Statistics {
+        /// Originating tab.
+        file: usize,
+        /// Independent report identity.
+        token: u64,
+        /// Aggregates over the matching indexed prefix.
+        statistics: Statistics,
+    },
+    /// A statistics error, kept separate from copy and viewport status.
+    StatisticsFailed {
+        /// Originating tab.
+        file: usize,
+        /// Independent report identity.
+        token: u64,
+        /// Read, source-identity or cancellation failure.
+        text: String,
+    },
     /// Publish rows, selected-record details and progress for a viewport request.
     View(Box<Snapshot>),
     /// Report the filtered ordinal found for a position lookup.

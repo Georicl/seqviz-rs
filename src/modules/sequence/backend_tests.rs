@@ -6,9 +6,6 @@ use tempfile::TempDir;
 /// Task runner specialised to sequence request and update messages.
 type Worker = TaskWorker<Request, Update>;
 
-/// Large fixtures need time to finish in debug builds on shared CI hosts.
-const LARGE_FIXTURE_TIMEOUT: Duration = Duration::from_secs(60);
-
 /// Temporary input files and cache directory kept alive for a backend test.
 struct Fixture {
     /// Keeps fixture files and generated caches alive for the test.
@@ -56,11 +53,152 @@ fn view(token: u64, file: usize, start: u64) -> Request {
         token,
         file,
         record: 0,
+        position: 0,
+        anchor: true,
+        query: Default::default(),
         start,
         count: 80,
         list_start: 0,
         list_count: 10,
     })
+}
+
+/// Filtered positions select stable source IDs, and both copy and search retain that identity.
+#[test]
+fn query_windows_navigation_search_and_copy_keep_source_ids() {
+    use crate::modules::sequence::query::{RecordFilter, RecordQuery, RecordSort, SortKey};
+    let fixture = Fixture::new(&[b">short\nA\n>beta\nCC\n>alpha\nGGG\n>delta\nTT\n"]);
+    let query = RecordQuery {
+        filter: RecordFilter::parse("name=a minlen=2").unwrap(),
+        sort: RecordSort {
+            key: SortKey::Length,
+            descending: true,
+        },
+    };
+    let request = ViewRequest {
+        token: 1,
+        file: 0,
+        record: 0,
+        position: 0,
+        anchor: false,
+        query: Box::new(query),
+        start: 0,
+        count: 80,
+        list_start: 0,
+        list_count: 2,
+    };
+    let worker = fixture.start(vec![Request::View(request.clone())]);
+    let snapshot = wait_view(&worker, |s| s.progress.complete);
+    assert_eq!(snapshot.matching_records, 3);
+    assert_eq!(snapshot.request.record, 2);
+    assert_eq!(snapshot.window.sequence, b"GGG");
+    assert_eq!(
+        snapshot.records.iter().map(|r| r.id).collect::<Vec<_>>(),
+        [2, 1]
+    );
+
+    let mut next = request.clone();
+    next.token = 2;
+    next.position = 1;
+    worker.send(Request::View(next));
+    let snapshot = wait_view(&worker, |s| s.request.token == 2);
+    assert_eq!(snapshot.request.record, 1);
+    assert_eq!(snapshot.window.sequence, b"CC");
+    // The same view is resent by the foreground before it queues a source-ID copy.
+    worker.send(Request::View(ViewRequest {
+        anchor: true,
+        ..snapshot.request
+    }));
+    worker.send(Request::Copy {
+        operation_id: 1,
+        file: 0,
+        record: 1,
+        range: None,
+        cancel: action_cancel(),
+    });
+    loop {
+        match worker.updates.recv_timeout(Duration::from_secs(5)).unwrap() {
+            Update::Copied { text, .. } => {
+                assert_eq!(text, ">beta\nCC\n");
+                break;
+            }
+            Update::OperationFailed { text, .. } => panic!("Copy failed: {text}"),
+            _ => {}
+        }
+    }
+    worker.send(Request::Search {
+        operation_id: 2,
+        file: 0,
+        query: "a".into(),
+        after: 2,
+        cancel: action_cancel(),
+    });
+    loop {
+        match worker.updates.recv_timeout(Duration::from_secs(5)).unwrap() {
+            Update::Selected { record, .. } => {
+                assert_eq!(record, 3);
+                break;
+            }
+            Update::OperationFailed { text, .. } => panic!("Search failed: {text}"),
+            _ => {}
+        }
+    }
+}
+
+/// The worker itself anchors its first resolved row before later scan chunks reorder the query.
+#[test]
+fn worker_keeps_the_first_resolved_source_selected_during_indexing() {
+    use crate::modules::sequence::query::{RecordQuery, RecordSort, SortKey};
+    let input = format!(">z\nG\n>zz\n{}\n>a\nC\n", "A".repeat(150_000));
+    let fixture = Fixture::new(&[input.as_bytes()]);
+    let (send, receive) = mpsc::channel();
+    let mut backend = Backend::new(
+        SessionFiles::new(fixture.paths.clone()),
+        fixture.cache.clone(),
+        send,
+        action_cancel(),
+    );
+    backend.set_view(ViewRequest {
+        token: 1,
+        file: 0,
+        record: 0,
+        position: 0,
+        anchor: false,
+        query: Box::new(RecordQuery {
+            sort: RecordSort {
+                key: SortKey::Name,
+                descending: false,
+            },
+            ..Default::default()
+        }),
+        start: 0,
+        count: 8,
+        list_start: 0,
+        list_count: 3,
+    });
+    let mut final_position = 0;
+    for _ in 0..8 {
+        backend.last_publish = Instant::now() - PUBLISH_INTERVAL;
+        assert!(backend.tick());
+        for update in receive.try_iter() {
+            if let Update::View(snapshot) = update {
+                assert_eq!(snapshot.request.record, 0);
+                assert_eq!(snapshot.window.sequence, b"G");
+                final_position = snapshot.request.position;
+            }
+        }
+        if backend.slots[0]
+            .as_ref()
+            .unwrap()
+            .dataset
+            .progress()
+            .complete
+        {
+            break;
+        }
+    }
+    assert_eq!(final_position, 1);
+    assert!(backend.view.as_ref().unwrap().anchor);
 }
 
 /// Wait up to five seconds for a snapshot satisfying the test's acceptance predicate.
@@ -314,91 +452,141 @@ fn cancelled_actions_keep_their_flags_and_never_publish_success() {
     assert!(cancelled.load(Ordering::Relaxed));
 }
 
-/// Check a large full-record copy survives adjacent viewport generations unchanged.
+/// A full copy stays pending across a viewport refresh and spans several scan/read chunks.
 #[test]
-fn a_32_mib_copy_survives_view_resizes_without_losing_operation_identity() {
-    let length = 32 * 1024 * 1024;
-    let mut data = b">large full header\n".to_vec();
-    data.extend(std::iter::repeat_n(b'A', length));
-    data.push(b'\n');
-    let fixture = Fixture::new(&[&data]);
-    let cancel = action_cancel();
-    let worker = fixture.start(vec![
-        view(1, 0, 0),
-        Request::Copy {
-            operation_id: 71,
-            file: 0,
-            record: 0,
-            range: None,
-            cancel: Arc::clone(&cancel),
-        },
-        view(2, 0, 0),
-        view(3, 0, 0),
-    ]);
-    let deadline = Instant::now() + LARGE_FIXTURE_TIMEOUT;
-    loop {
-        match worker
-            .updates
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+fn pending_full_record_copy_survives_view_refreshes_across_scan_chunks() {
+    let length = 3 * 64 * 1024 + 17;
+    let sequence: String = "ACGTN".chars().cycle().take(length).collect();
+    let data = format!(">full header\n{sequence}\n");
+    let fixture = Fixture::new(&[data.as_bytes()]);
+    let (send, receive) = mpsc::channel();
+    let mut backend = Backend::new(
+        SessionFiles::new(fixture.paths.clone()),
+        fixture.cache.clone(),
+        send,
+        action_cancel(),
+    );
+    assert!(backend.handle_requests([view(1, 0, 0)].into_iter()));
+    assert!(backend.tick());
+    assert!(
+        !backend.slots[0]
+            .as_ref()
             .unwrap()
-        {
-            Update::Copied {
-                operation_id,
-                file,
-                text,
-            } => {
-                assert_eq!((operation_id, file), (71, 0));
-                let sequence = text.strip_prefix(">large full header\n").unwrap();
-                assert_eq!(sequence.bytes().filter(|b| *b != b'\n').count(), length);
-                assert!(sequence.bytes().all(|b| b == b'A' || b == b'\n'));
-                break;
+            .dataset
+            .progress()
+            .complete
+    );
+    let cancel = action_cancel();
+    assert!(
+        backend.handle_requests(
+            [Request::Copy {
+                operation_id: 71,
+                file: 0,
+                record: 0,
+                range: None,
+                cancel: Arc::clone(&cancel),
+            }]
+            .into_iter()
+        )
+    );
+    assert!(backend.tick());
+    assert_eq!(backend.copy.as_ref().unwrap().operation_id, 71);
+    assert!(backend.handle_requests([view(2, 0, 0), view(3, 0, 0)].into_iter()));
+    assert_eq!(backend.copy.as_ref().unwrap().operation_id, 71);
+    assert!(!cancel.load(Ordering::Relaxed));
+    let expected = format!(
+        ">full header\n{}",
+        sequence
+            .as_bytes()
+            .chunks(60)
+            .map(|line| format!("{}\n", std::str::from_utf8(line).unwrap()))
+            .collect::<String>()
+    );
+    let mut copied = None;
+    for _ in 0..4 {
+        assert!(backend.tick());
+        for update in receive.try_iter() {
+            match update {
+                Update::Copied {
+                    operation_id,
+                    file,
+                    text,
+                } => {
+                    assert_eq!((operation_id, file), (71, 0));
+                    copied = Some(text);
+                }
+                Update::OperationFailed { text, .. } => panic!("Copy failed: {text}"),
+                _ => {}
             }
-            Update::OperationFailed { text, .. } => panic!("Copy failed: {text}"),
-            _ => {}
+        }
+        if copied.is_some() {
+            break;
         }
     }
+    assert_eq!(copied.as_deref(), Some(expected.as_str()));
     assert!(!cancel.load(Ordering::Relaxed));
 }
 
-/// Check a pending name search survives viewport refreshes while scanning a large preceding record.
+/// A search remains pending through refreshes until a later scan chunk indexes its target name.
 #[test]
-fn search_survives_layout_generations_until_its_target_is_indexed() {
-    let mut data = b">large\n".to_vec();
-    data.extend(std::iter::repeat_n(b'A', 32 * 1024 * 1024));
-    data.extend_from_slice(b"\n>target-read\nCGT\n");
-    let fixture = Fixture::new(&[&data]);
+fn pending_name_search_survives_view_refreshes_until_target_is_indexed() {
+    let data = format!(">first\n{}\n>target-read\nCGT\n", "A".repeat(3 * 64 * 1024));
+    let fixture = Fixture::new(&[data.as_bytes()]);
+    let (send, receive) = mpsc::channel();
+    let mut backend = Backend::new(
+        SessionFiles::new(fixture.paths.clone()),
+        fixture.cache.clone(),
+        send,
+        action_cancel(),
+    );
+    assert!(backend.handle_requests([view(1, 0, 0)].into_iter()));
+    assert!(backend.tick());
     let cancel = action_cancel();
-    let worker = fixture.start(vec![
-        view(1, 0, 0),
-        Request::Search {
-            operation_id: 82,
-            file: 0,
-            query: "target".into(),
-            after: 0,
-            cancel: Arc::clone(&cancel),
-        },
-        view(2, 0, 0),
-        view(3, 0, 0),
-    ]);
-    let deadline = Instant::now() + LARGE_FIXTURE_TIMEOUT;
-    loop {
-        match worker
-            .updates
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+    assert!(
+        backend.handle_requests(
+            [Request::Search {
+                operation_id: 82,
+                file: 0,
+                query: "target".into(),
+                after: 0,
+                cancel: Arc::clone(&cancel),
+            }]
+            .into_iter()
+        )
+    );
+    assert!(backend.tick());
+    assert_eq!(backend.search.as_ref().unwrap().operation_id, 82);
+    assert_eq!(
+        backend.slots[0]
+            .as_ref()
             .unwrap()
-        {
-            Update::Selected {
-                operation_id,
-                file,
-                record,
-            } => {
-                assert_eq!((operation_id, file, record), (82, 0, 1));
-                break;
+            .dataset
+            .find_name("target", 0)
+            .unwrap(),
+        None
+    );
+    assert!(backend.handle_requests([view(2, 0, 0), view(3, 0, 0)].into_iter()));
+    assert_eq!(backend.search.as_ref().unwrap().operation_id, 82);
+    assert!(!cancel.load(Ordering::Relaxed));
+    let mut selected = None;
+    for _ in 0..4 {
+        assert!(backend.tick());
+        for update in receive.try_iter() {
+            match update {
+                Update::Selected {
+                    operation_id,
+                    file,
+                    record,
+                } => selected = Some((operation_id, file, record)),
+                Update::OperationFailed { text, .. } => panic!("Search failed: {text}"),
+                _ => {}
             }
-            Update::OperationFailed { text, .. } => panic!("Search failed: {text}"),
-            _ => {}
+        }
+        if selected.is_some() {
+            break;
         }
     }
+    assert_eq!(selected, Some((82, 0, 1)));
     assert!(!cancel.load(Ordering::Relaxed));
 }
 
@@ -413,6 +601,9 @@ fn context_changes_and_explicit_cancel_end_pending_operations() {
             token: 2,
             file: 0,
             record: 1,
+            position: 0,
+            anchor: true,
+            query: Default::default(),
             start: 0,
             count: 80,
             list_start: 0,

@@ -114,6 +114,7 @@ cargo run --release --locked -- test/test.fa test/alignments.bam test/variants.v
 | 切换记录列表 / 序列焦点 | 点击区域，或 Ctrl+h / Ctrl+l |
 | 翻页 / 开头 / 末尾 | Page Up / Page Down / Home / End |
 | 按名称搜索 / 下一个匹配 | `/` 输入后按 Enter / `n` |
+| 筛选记录 / 切换排序 | `f` 输入条件后按 Enter / `s` |
 | 跳到序列坐标 | `:` 输入 1-based 坐标后按 Enter |
 | 选择并复制序列 | 鼠标拖选，或 `v` 后移动光标；`y` 复制 |
 | 显示 / 隐藏质量字符副行 | `Q` |
@@ -121,6 +122,12 @@ cargo run --release --locked -- test/test.fa test/alignments.bam test/variants.v
 | 取消任务并暂停索引 | 浏览界面中按 Esc |
 
 序列随窗口自动换行。FASTA/FASTQ 可跨行拖选，在边缘停留会继续滚动；缩放后保留选中的序列坐标。F4 显示记录数、总长度、最短/最长/平均长度及适用格式的 N50；SAM/BAM 按比对记录计数。
+
+`f` 使用空格分隔的条件，例如 `name=read minlen=100 maxlen=1000`。支持 `name`、`minlen`、`maxlen`、`mingc`、`maxgc`、`minq`、`maxq`；SAM/BAM 还支持最低 MAPQ 的 `mapq`、必须包含的 FLAG 位 `flag` 和必须排除的位 `noflag`，例如 `mapq=30 noflag=0x104`。GC 使用百分数，质量条件使用每条记录的平均 Phred。条件同时生效，清空输入后按 Enter 恢复全部记录；Esc 放弃修改。
+
+`s` 依次切换源顺序、名称升序、长度降序、GC 降序和平均质量降序，SAM/BAM 另有 MAPQ 降序。缺失值排在最后。名称搜索遵守当前筛选与排序，选中记录在索引继续增长时保持不变。
+
+序列 F4 统计覆盖全文件已完成索引的记录，包括长度、GC、记录平均质量的区间分布，按质量字符数加权的平均 Phred 与 Q30，以及 SAM/BAM 的 mapped、unmapped、primary、secondary、supplementary 和 duplicate 计数。筛选列表不改变全文件统计的范围；索引尚未完成时显示计算状态。
 
 ### VCF 浏览
 
@@ -134,11 +141,20 @@ cargo run --release --locked -- test/test.fa test/alignments.bam test/variants.v
 | 横向滚动详情 | ← / →，或 `h` / `l` |
 | 选择 contig | `c`，输入名称筛选后按 Enter；也可选择 All records |
 | 在当前 contig 定位 | `:` 输入 1-based 坐标后按 Enter |
+| 筛选变异 / 切换排序 | `f` 输入条件后按 Enter / `s` |
+| 当前筛选结果统计 / 刷新统计 | F4 |
+| 按样本名定位 / 下一个匹配 | `/` 输入后按 Enter / `n` |
+| 固定当前样本 / 仅显示固定样本 | Samples 中按 `p` / `P` |
+| 选择 FORMAT 字段 | `F`，例如输入 `GT,DP,AD` |
 | 原始 header | `m` 或 F3 |
 | 按当前上下文复制 | `y` |
 | 在主表或 Raw 中复制 header 与当前记录 | `Y` |
 
-Samples 保留 FORMAT 字段顺序，按需解析可见样本。GT 颜色代表等位基因编号，AD 使用相同顺序；QUAL、GQ 显示原始数值，FILTER `.` 与 PASS 分开显示。
+Samples 默认保留 FORMAT 字段顺序，按需解析可见样本。`F` 可选择并重排字段，清空输入恢复全部字段；选择在变异切换后保留，当前变异缺少的字段显示 `.`。固定样本名称带下划线，`P` 可在固定样本和全部样本间切换。复制内容的字段标题与当前显示顺序一致。GT 颜色代表等位基因编号，AD 使用相同顺序；QUAL、GQ 显示原始数值，FILTER `.` 与 PASS 分开显示。
+
+VCF 筛选条件以空格分隔，例如 `pass qual>=30 type=SNV` 或 `contig=chr1 start=100 end=200 sort=-qual`。支持 `pass`、`qual>=`、`qual<=`、`type=`、`id=`、`contig=`、`start=` 和 `end=`；位置范围含两端，`id` 是区分大小写的字面部分匹配。`sort=source|pos|qual|type` 指定排序，前加 `-` 表示降序；`s` 也可直接切换排序。contig 选择器和输入条件同时生效。清空筛选输入恢复默认条件与排序。
+
+VCF 的 F4 统计覆盖当前 contig 与筛选条件下已索引的记录，包括变异类型、PASS/缺失/其他 FILTER 计数、QUAL 分布，以及全部样本 GT 的完整、缺失、部分缺失和无 GT 字段计数。样本固定与字段选择不改变统计范围。索引尚未完成时标为部分结果，再按 F4 刷新。
 
 ## 复制内容
 

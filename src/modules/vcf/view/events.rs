@@ -16,6 +16,7 @@ impl VcfView {
             match event.code {
                 KeyCode::Esc | KeyCode::Char('q') => {
                     self.cancel_copy();
+                    self.cancel_statistics();
                     self.overlay = None;
                     self.info.selection = None;
                     self.dragging = false;
@@ -45,6 +46,7 @@ impl VcfView {
                 KeyCode::Char('y') | KeyCode::Char('Y') => self.copy(false),
                 KeyCode::F(2) => self.open_overlay(Overlay::File),
                 KeyCode::F(3) => self.open_overlay(Overlay::Header),
+                KeyCode::F(4) => self.open_overlay(Overlay::Statistics),
                 KeyCode::F(1) | KeyCode::Char('?') => self.open_overlay(Overlay::Help),
                 _ => {}
             }
@@ -118,11 +120,30 @@ impl VcfView {
                 self.cancel_copy();
                 self.input = Some(Input::Position(String::new()));
             }
+            KeyCode::Char('f') => {
+                self.cancel_copy();
+                self.input = Some(Input::Filter(self.filter_text.clone()));
+            }
+            KeyCode::Char('s') => self.cycle_order(),
+            KeyCode::Char('/') => {
+                self.cancel_copy();
+                self.input = Some(Input::Sample(String::new()));
+            }
+            KeyCode::Char('n') if !self.sample_query.is_empty() => {
+                self.find_sample(&self.sample_query.clone(), true);
+            }
+            KeyCode::Char('p') => self.pin_sample(),
+            KeyCode::Char('P') => self.toggle_pinned_samples(),
+            KeyCode::Char('F') => {
+                self.cancel_copy();
+                self.input = Some(Input::Fields(self.samples.field_expression()));
+            }
             KeyCode::Char('y') => self.copy(false),
             KeyCode::Char('Y') => self.copy(true),
             KeyCode::F(1) | KeyCode::Char('?') => self.open_overlay(Overlay::Help),
             KeyCode::F(2) => self.open_overlay(Overlay::File),
             KeyCode::F(3) | KeyCode::Char('m') => self.open_overlay(Overlay::Header),
+            KeyCode::F(4) => self.open_overlay(Overlay::Statistics),
             _ => {}
         }
     }
@@ -146,8 +167,27 @@ impl VcfView {
             KeyCode::PageUp if picker => self.picker_row = self.picker_row.saturating_sub(10),
             KeyCode::Enter if picker => self.choose_contig(),
             KeyCode::Enter => {
-                let Some(Input::Position(text)) = self.input.take() else {
-                    return;
+                let text = match self.input.take() {
+                    Some(Input::Filter(text)) => {
+                        if let Err(error) = self.apply_filter(&text) {
+                            self.message = error;
+                            self.input = Some(Input::Filter(text));
+                        }
+                        return;
+                    }
+                    Some(Input::Sample(text)) => {
+                        self.find_sample(&text, false);
+                        return;
+                    }
+                    Some(Input::Fields(text)) => {
+                        if let Err(error) = self.choose_fields(&text) {
+                            self.message = error;
+                            self.input = Some(Input::Fields(text));
+                        }
+                        return;
+                    }
+                    Some(Input::Position(text)) => text,
+                    _ => return,
                 };
                 let Some(position) = text.parse::<u64>().ok().filter(|&n| n > 0) else {
                     self.message = "Enter a positive 1-based position".into();
@@ -170,11 +210,19 @@ impl VcfView {
                     token: self.token,
                     contig,
                     position,
+                    query: self.query.clone(),
                 });
                 self.message = "Locating position…".into();
             }
             _ => {
-                if let Some(Input::Position(text) | Input::Contig(text)) = self.input.as_mut() {
+                if let Some(
+                    Input::Position(text)
+                    | Input::Contig(text)
+                    | Input::Filter(text)
+                    | Input::Sample(text)
+                    | Input::Fields(text),
+                ) = self.input.as_mut()
+                {
                     crate::widgets::input::edit(text, event);
                 }
                 if picker {
@@ -188,21 +236,9 @@ impl VcfView {
         let Some((contig, _)) = self.picker_options().get(self.picker_row).cloned() else {
             return;
         };
-        self.cancel_copy();
-        self.locating = None;
         self.contig = contig;
-        self.selected = 0;
-        self.start = 0;
-        self.detail_start = 0;
-        self.detail_row = 0;
-        self.horizontal = 0;
-        self.selection = None;
-        self.dragging = false;
-        self.drag_anchor = None;
+        self.reset_query_position();
         self.input = None;
-        self.dirty = true;
-        self.redraw = true;
-        self.message.clear();
     }
     /// Move by a signed row count in the focused table or detail panel.
     fn move_row(&mut self, delta: i64) {
@@ -213,7 +249,7 @@ impl VcfView {
         self.select_detail_row(self.detail_row.saturating_add_signed(delta as isize));
     }
     /// Clamp the selected detail row, clear dragged text and scroll it into view.
-    fn select_detail_row(&mut self, row: usize) {
+    pub(super) fn select_detail_row(&mut self, row: usize) {
         self.selection = None;
         self.dragging = false;
         self.drag_anchor = None;
@@ -318,7 +354,11 @@ impl VcfView {
                 if let Some(ordinal) = self
                     .snapshot
                     .as_ref()
-                    .filter(|s| s.request.start == self.start && s.request.contig == self.contig)
+                    .filter(|s| {
+                        s.request.start == self.start
+                            && s.request.contig == self.contig
+                            && s.request.query == self.query
+                    })
                     .and_then(|s| s.rows.get((y - self.layout.rows.y) as usize))
                     .map(|r| r.ordinal)
                 {

@@ -67,6 +67,11 @@ impl ModuleRequest {
                 view_token: Some(*token),
                 operation_id: None,
             },
+            VcfRequest::Statistics { file, token, .. } => MessageIdentity {
+                document: Some(*file),
+                view_token: None,
+                operation_id: Some(*token),
+            },
             VcfRequest::Cancel(file) | VcfRequest::Close(file) => MessageIdentity {
                 document: Some(*file),
                 ..MessageIdentity::default()
@@ -127,6 +132,12 @@ impl ModuleUpdate {
                 document: Some(*file),
                 view_token: Some(*token),
                 operation_id: None,
+            },
+            VcfUpdate::Statistics { file, token, .. }
+            | VcfUpdate::StatisticsFailed { file, token, .. } => MessageIdentity {
+                document: Some(*file),
+                view_token: None,
+                operation_id: Some(*token),
             },
             VcfUpdate::Message { file, .. } => MessageIdentity {
                 document: Some(*file),

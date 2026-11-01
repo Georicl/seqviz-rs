@@ -1,5 +1,5 @@
 //! Sequence scanning, view snapshots and cancellable domain operations.
-use super::data::{Dataset, Progress, SequenceWindow, Stats};
+use super::data::{Dataset, Progress, RecordPage, SequenceWindow, Stats};
 use super::operations::{CopyJob, SearchJob};
 use super::protocol::{Request, Snapshot, Update, ViewRequest};
 use crate::core::tasks::Driver;
@@ -198,15 +198,28 @@ impl Backend {
                 }
             }
         }
-        let context_changed = self
+        let context_changed = self.view.as_ref().is_some_and(|old| {
+            old.file != file
+                || old.record != next.record
+                || old.position != next.position
+                || old.query != next.query
+        });
+        let query_changed = self
             .view
             .as_ref()
-            .is_some_and(|old| old.file != file || old.record != next.record);
+            .is_some_and(|old| old.query != next.query);
+        if query_changed {
+            self.tabs[file].paused = false;
+        }
         if context_changed {
             self.cancel_operations();
         }
         let moved = self.view.as_ref().is_none_or(|old| {
-            old.file != file || old.record != next.record || old.start != next.start
+            old.file != file
+                || old.record != next.record
+                || old.start != next.start
+                || old.position != next.position
+                || old.query != next.query
         });
         // Refresh/resize after Esc cannot restart scanning; a new position may read its prefix.
         self.foreground_read |= moved;
@@ -232,6 +245,7 @@ impl Backend {
             } => {
                 if !query.is_empty() && self.accept_operation(file, operation_id, &cancel) {
                     self.search = Some(SearchJob {
+                        record_query: self.view.as_ref().unwrap().query.as_ref().clone(),
                         operation_id,
                         file,
                         query,
@@ -361,13 +375,26 @@ impl Backend {
         self.dirty |=
             update_statistics(slot, tab, &key, stopped, &self.cancel, &self.updates, file);
         if self.dirty && self.last_publish.elapsed() >= PUBLISH_INTERVAL {
-            match snapshot(slot, current.clone(), tab.paused) {
+            match snapshot(slot, current.clone(), tab.paused, Arc::clone(&self.cancel)) {
                 Ok(snapshot) => {
+                    // Preserve the resolved source record as later scan steps change result ranks.
+                    if snapshot.record.is_some()
+                        && let Some(view) = self.view.as_mut()
+                    {
+                        view.record = snapshot.request.record;
+                        view.position = snapshot.request.position;
+                        view.list_start = snapshot.request.list_start;
+                        view.anchor = true;
+                    }
                     if self.updates.send(Update::View(Box::new(snapshot))).is_err() {
                         return false;
                     }
                 }
-                Err(error) => message(&self.updates, file, error.to_string()),
+                Err(error) => {
+                    if error.kind() != io::ErrorKind::Interrupted {
+                        message(&self.updates, file, error.to_string());
+                    }
+                }
             }
             self.dirty = false;
             self.last_publish = Instant::now();
@@ -417,36 +444,78 @@ fn message(updates: &mpsc::Sender<Update>, file: usize, text: String) {
     let _ = updates.send(Update::Message { file, text });
 }
 
-/// Read the bounded record list and sequence window, attaching cached statistics and failures.
-fn snapshot(slot: &mut Slot, request: ViewRequest, paused: bool) -> io::Result<Snapshot> {
-    let record = slot.dataset.record(request.record)?;
-    let window = if record.is_some() {
-        slot.dataset
-            .read_range(request.record, request.start, request.count.min(128 * 1024))?
+/// Resolve the result position while retaining the selected source ID as indexing reorders rows.
+fn record_page(dataset: &Dataset, request: &mut ViewRequest) -> io::Result<RecordPage> {
+    let rows = request.list_count.clamp(1, 256) as u64;
+    let mut page = dataset.query_records(&request.query, request.list_start, rows as usize)?;
+    let anchored = if request.anchor {
+        dataset.record_position(&request.query, request.record)?
     } else {
-        SequenceWindow {
-            start: request.start,
-            sequence: Vec::new(),
-            quality: Vec::new(),
-        }
+        None
     };
-    let mut progress = slot.dataset.progress();
-    if let Some(error) = &slot.failure {
-        progress.error = Some(error.clone());
+    request.position = anchored.unwrap_or(request.position);
+    // A position beyond the current prefix may still appear while indexing is incomplete.
+    if dataset.progress().complete {
+        request.position = request.position.min(page.total.saturating_sub(1));
     }
-    Ok(Snapshot {
-        records: slot
-            .dataset
-            .records(request.list_start, request.list_count.min(256))?,
-        format: slot.dataset.format(),
-        compression: slot.dataset.compression().to_owned(),
-        file_size: slot.file_size,
-        record,
-        window,
-        progress,
-        stats: slot.stats.clone(),
-        request,
-        paused,
+    let mut first = page.offset.min(request.position);
+    if request.position >= first.saturating_add(rows) {
+        first = request.position + 1 - rows;
+    }
+    if first != page.offset {
+        page = dataset.query_records(&request.query, first, rows as usize)?;
+    }
+    request.list_start = page.offset;
+    Ok(page)
+}
+
+/// Read the bounded record list and sequence window, attaching cached statistics and failures.
+fn snapshot(
+    slot: &mut Slot,
+    mut request: ViewRequest,
+    paused: bool,
+    cancel: Arc<AtomicBool>,
+) -> io::Result<Snapshot> {
+    let failure = slot.failure.clone();
+    let stats = slot.stats.clone();
+    let file_size = slot.file_size;
+    slot.dataset.cancellable(cancel, |dataset| {
+        let page = record_page(dataset, &mut request)?;
+        let selected = page
+            .records
+            .get(request.position.saturating_sub(page.offset) as usize);
+        let record = if let Some(selected) = selected {
+            request.record = selected.id;
+            dataset.record(selected.id)?
+        } else {
+            None
+        };
+        let window = if record.is_some() {
+            dataset.read_range(request.record, request.start, request.count.min(128 * 1024))?
+        } else {
+            SequenceWindow {
+                start: request.start,
+                sequence: Vec::new(),
+                quality: Vec::new(),
+            }
+        };
+        let mut progress = dataset.progress();
+        if let Some(error) = &failure {
+            progress.error = Some(error.clone());
+        }
+        Ok(Snapshot {
+            records: page.records,
+            matching_records: page.total,
+            format: dataset.format(),
+            compression: dataset.compression().to_owned(),
+            file_size,
+            record,
+            window,
+            progress,
+            stats,
+            request,
+            paused,
+        })
     })
 }
 

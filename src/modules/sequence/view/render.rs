@@ -21,26 +21,26 @@ pub(crate) fn draw(frame: &mut Frame, app: &SequenceView) {
         .map(|s| {
             format!(
                 "{}{}",
-                s.progress.records,
+                s.matching_records,
                 if s.progress.complete { "" } else { "+" }
             )
         })
         .unwrap_or_else(|| "…".into());
     let list_block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" Records · {discovered} "))
+        .title(format!(
+            " Records · {discovered} · {} ",
+            app.tab().query.sort.label()
+        ))
         .border_style(Style::default().fg(if app.focus == Focus::Records {
             focus
         } else {
             border
         }));
     frame.render_widget(list_block, left);
-    if let Some(snapshot) = &app
-        .tab()
-        .snapshot
-        .as_ref()
-        .filter(|s| s.request.list_start == app.tab().list_start)
-    {
+    if let Some(snapshot) = &app.tab().snapshot.as_ref().filter(|s| {
+        s.request.list_start == app.tab().list_start && s.request.query.as_ref() == &app.tab().query
+    }) {
         let lines: Vec<Line<'_>> = snapshot
             .records
             .iter()
@@ -173,10 +173,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &SequenceView) {
             .tab()
             .snapshot
             .as_ref()
-            .is_some_and(|s| s.progress.complete && s.progress.records == 0);
+            .is_some_and(|s| s.matching_records == 0);
         frame.render_widget(
             Paragraph::new(if empty {
-                "No records"
+                "No matching records"
             } else {
                 "Reading records…"
             }),
@@ -207,12 +207,20 @@ pub(crate) fn status(app: &SequenceView) -> crate::modules::view::Status {
         app.tab().message.clone()
     } else if let Some(snapshot) = &app.tab().snapshot {
         format!(
-            "{} · {} · record {} / {}{} · position {} · {}{}",
+            "{} · {} · row {} / {}{} · source #{} · position {} · {}{}",
             snapshot.format.name(),
             snapshot.compression,
-            app.tab().record + 1,
-            snapshot.progress.records,
+            if snapshot.matching_records == 0 {
+                0
+            } else {
+                app.tab().position + 1
+            },
+            snapshot.matching_records,
             if snapshot.progress.complete { "" } else { "+" },
+            snapshot
+                .record
+                .as_ref()
+                .map_or_else(|| "—".into(), |record| (record.id + 1).to_string()),
             app.tab().cursor + 1,
             if snapshot.progress.complete {
                 "Indexed"
@@ -231,9 +239,9 @@ pub(crate) fn status(app: &SequenceView) -> crate::modules::view::Status {
         "Opening…".into()
     };
     let hints = if app.can_copy() {
-        "? help  / name  : position  y copy  Tab file  x close  F4 stats  q quit"
+        "? help  / name  f filter  s sort  : position  y copy  Tab file  F4 stats  q quit"
     } else {
-        "? help  / name  : position  Tab file  x close  F4 stats  q quit"
+        "? help  / name  f filter  s sort  : position  Tab file  F4 stats  q quit"
     };
     crate::modules::view::Status {
         message: status,

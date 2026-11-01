@@ -25,6 +25,7 @@ pub(super) fn draw(frame: &mut Frame, view: &VcfView) {
             Overlay::Help => "VCF help",
             Overlay::File => "File",
             Overlay::Header => "Original VCF header",
+            Overlay::Statistics => "Statistics · F4 refreshes",
         };
         text_panel::draw(
             frame,
@@ -54,11 +55,12 @@ fn draw_header(frame: &mut Frame, view: &VcfView) {
                 Style::default().fg(view.theme.focus),
             ),
             Line::from(format!(
-                "Contig: {} · c choose{}",
+                "Contig: {} · c choose{} · {}",
                 view.contig.as_deref().unwrap_or("All records"),
                 view.entry()
                     .map(|e| format!(" · {}:{}", e.record.chrom, e.record.pos))
-                    .unwrap_or_default()
+                    .unwrap_or_default(),
+                view.query.summary(),
             )),
         ]
     } else if let Some(error) = &view.load_error {
@@ -243,11 +245,11 @@ fn draw_table(frame: &mut Frame, view: &VcfView) {
         Paragraph::new(header),
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
-    let Some(snapshot) = view
-        .snapshot
-        .as_ref()
-        .filter(|s| s.request.start == view.start && s.request.contig == view.contig)
-    else {
+    let Some(snapshot) = view.snapshot.as_ref().filter(|s| {
+        s.request.start == view.start
+            && s.request.contig == view.contig
+            && s.request.query == view.query
+    }) else {
         let message = view
             .load_error
             .as_ref()
@@ -314,17 +316,14 @@ fn detail_spans<'a>(line: &'a str, view: &VcfView) -> Vec<Span<'a>> {
         return vec![Span::styled(line, normal)];
     }
     let mut result = Vec::new();
-    let formats = view
-        .entry()
-        .map(|e| e.record.format.as_slice())
-        .unwrap_or(&[]);
+    let formats = view.sample_fields();
     for (index, value) in line.split('\t').enumerate() {
         if index > 0 {
             result.push(Span::raw("\t"));
         }
         if view.detail == Detail::Samples
             && index > 0
-            && formats.get(index - 1).is_some_and(|field| field == "GT")
+            && formats.get(index - 1).is_some_and(|field| *field == "GT")
         {
             result.extend(palette::genotype(value, &view.config, &view.theme));
         } else {
@@ -392,12 +391,27 @@ fn visible_detail(line: &str, row: usize, view: &VcfView, stops: &[usize]) -> Ve
         .selection
         .map(|(a, b)| if a <= b { (a, b) } else { (b, a) });
     let width = view.layout.detail_body.width as usize;
+    let pinned = view.detail == Detail::Samples
+        && view.snapshot.as_ref().is_some_and(|snapshot| {
+            view.samples
+                .source_index(snapshot.header.samples.len(), row)
+                .is_some_and(|source| view.samples.is_pinned(source))
+        });
+    let name_length = line
+        .split('\t')
+        .next()
+        .map_or(0, |name| name.chars().count());
     let (mut spans, rendered, source_width) = clip_spans(
         detail_spans(line, view),
         view.horizontal,
         width,
         stops,
         |column, style| {
+            let style = if pinned && column < name_length {
+                style.add_modifier(Modifier::UNDERLINED)
+            } else {
+                style
+            };
             if selection.is_some_and(|(a, b)| (row, column) >= a && (row, column) <= b) {
                 style.bg(view.theme.selection)
             } else if row == view.detail_row && view.focus == Focus::Detail {
@@ -411,9 +425,7 @@ fn visible_detail(line: &str, row: usize, view: &VcfView, stops: &[usize]) -> Ve
         && view.config.show_ad_bars
         && source_width >= view.horizontal
         && rendered + 5 < width
-        && let Some(index) = view
-            .entry()
-            .and_then(|e| e.record.format.iter().position(|f| f == "AD"))
+        && let Some(index) = view.sample_fields().iter().position(|field| *field == "AD")
         && let Some(value) = line.split('\t').nth(index + 1)
     {
         spans.push(Span::styled("  AD ", Style::default().fg(view.theme.muted)));
@@ -432,10 +444,23 @@ fn draw_details(frame: &mut Frame, view: &VcfView) {
     if view.layout.details.height == 0 {
         return;
     }
+    let title = if view.detail == Detail::Samples {
+        format!(
+            " Details · Samples · {} pinned{} ",
+            view.samples.pinned_count(),
+            if view.samples.pinned_only() {
+                " · pinned only"
+            } else {
+                ""
+            },
+        )
+    } else {
+        " Details ".into()
+    };
     frame.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Details ")
+            .title(title)
             .border_style(Style::default().fg(if view.focus == Focus::Detail {
                 view.theme.focus
             } else {
@@ -464,10 +489,7 @@ fn draw_details(frame: &mut Frame, view: &VcfView) {
     let stops = tab_stops(view);
     let heading = match view.detail {
         Detail::Info => "FIELD       VALUE".into(),
-        Detail::Samples => view
-            .entry()
-            .map(|e| format!("SAMPLE\t{}", e.record.format.join("\t")))
-            .unwrap_or_else(|| "SAMPLE".into()),
+        Detail::Samples => view.sample_heading(),
         Detail::Raw => "Original VCF row · TABs preserved when copied".into(),
     };
     let (heading, _, _) = clip_spans(

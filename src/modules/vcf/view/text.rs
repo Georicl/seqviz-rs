@@ -61,12 +61,12 @@ pub(super) fn tab_stops(view: &VcfView) -> Vec<usize> {
     if view.detail != Detail::Samples {
         return Vec::new();
     }
-    let Some(entry) = view.entry() else {
+    if view.entry().is_none() {
         return Vec::new();
-    };
-    let heading = format!("SAMPLE\t{}", entry.record.format.join("\t"));
+    }
+    let heading = view.sample_heading();
     let rows = view.detail_rows(view.detail_start, view.layout.detail_body.height as usize);
-    let mut widths = vec![12; entry.record.format.len() + 1];
+    let mut widths = vec![12; view.sample_fields().len() + 1];
     for line in std::iter::once(&heading).chain(rows.iter()) {
         for (index, value) in line.split('\t').enumerate() {
             if let Some(width) = widths.get_mut(index) {

@@ -114,6 +114,7 @@ The mouse wheel scrolls the area under the pointer. For filenames starting with 
 | Focus record list / sequence | Click the area, or Ctrl+h / Ctrl+l |
 | Page / beginning / end | Page Up / Page Down / Home / End |
 | Search by name / next match | `/`, then Enter / `n` |
+| Filter records / cycle ordering | `f`, then conditions and Enter / `s` |
 | Jump to a sequence position | `:`, then a 1-based coordinate and Enter |
 | Select and copy sequence | Drag, or press `v` and move; `y` copies |
 | Show / hide quality characters | `Q` |
@@ -121,6 +122,12 @@ The mouse wheel scrolls the area under the pointer. For filenames starting with 
 | Cancel work and pause indexing | Esc in the browsing view |
 
 Sequences wrap to the window width. In FASTA/FASTQ, drag across lines and hold at an edge to keep scrolling; resizing preserves the selected sequence coordinates. F4 shows record count, total length, minimum/maximum/mean length and N50 where applicable. SAM/BAM counts alignment records.
+
+Use space-separated conditions with `f`, for example `name=read minlen=100 maxlen=1000`. Supported keys are `name`, `minlen`, `maxlen`, `mingc`, `maxgc`, `minq` and `maxq`. SAM/BAM also accepts a minimum `mapq`, required `flag` bits and excluded `noflag` bits, such as `mapq=30 noflag=0x104`. GC bounds are percentages; quality bounds use each record's mean Phred score. Conditions are combined with AND. Submit empty input to clear the filter, or Esc to discard an edit.
+
+Press `s` to cycle source order, ascending name, descending length, GC and mean quality; SAM/BAM also offers descending MAPQ. Missing values sort last. Name searches follow the active filter and ordering, and the selected source record stays selected as indexing advances.
+
+Sequence F4 statistics cover completed records across the whole indexed file: length, GC and mean-quality distributions, score-weighted mean Phred and Q30, and SAM/BAM mapped, unmapped, primary, secondary, supplementary and duplicate counts. Filtering the list does not change this file-wide scope. An unfinished index is identified in the statistics status.
 
 ### VCF browsing
 
@@ -134,11 +141,20 @@ The table shows CHROM, POS, ID, REF, ALT, TYPE, QUAL and FILTER. Narrow windows 
 | Scroll details horizontally | ← / →, or `h` / `l` |
 | Choose a contig | `c`, type to filter, then Enter; All records is also available |
 | Locate a position in the current contig | `:`, then a 1-based coordinate and Enter |
+| Filter variants / cycle ordering | `f`, then conditions and Enter / `s` |
+| Statistics for the active filter / refresh | F4 |
+| Find sample name / next match | `/`, then Enter / `n` |
+| Pin current sample / show pinned samples only | `p` in Samples / `P` |
+| Choose FORMAT fields | `F`, for example `GT,DP,AD` |
 | Original header | `m` or F3 |
 | Copy current context | `y` |
 | Copy header and current record from table or Raw | `Y` |
 
-Samples retains FORMAT field order and parses visible samples as needed. GT colours identify allele numbers, with the same ordering in AD bars. QUAL and GQ retain their original numeric values; FILTER `.` is distinct from PASS.
+Samples retains FORMAT field order by default and parses visible samples as needed. Use `F` to choose and reorder fields, or submit empty input to show all fields. The selection persists across variants; absent fields appear as `.`. Pinned sample names are underlined, and `P` switches between pinned and all samples. Copied headings follow the displayed field order. GT colours identify allele numbers, with the same ordering in AD bars. QUAL and GQ retain their original numeric values; FILTER `.` is distinct from PASS.
+
+VCF filters use space-separated conditions, such as `pass qual>=30 type=SNV` or `contig=chr1 start=100 end=200 sort=-qual`. Supported conditions are `pass`, `qual>=`, `qual<=`, `type=`, `id=`, `contig=`, `start=` and `end=`. Position bounds are inclusive; `id` is a case-sensitive literal substring. Use `sort=source|pos|qual|type`, with `-` for descending order, or press `s` to cycle ordering. The contig picker and filter conditions apply together. Empty filter input restores default conditions and source order.
+
+VCF F4 statistics cover indexed records matching the active contig and filter: variant types, PASS/missing/other FILTER counts, QUAL distribution, and fully called, missing, partially missing and unavailable GT counts across all samples. Sample pins and FORMAT selection do not change the statistical scope. An unfinished index is marked partial; press F4 again to refresh.
 
 ## Copying
 

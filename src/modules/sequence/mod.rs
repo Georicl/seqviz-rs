@@ -15,6 +15,8 @@ pub mod output;
 pub mod palette;
 /// Typed requests and updates exchanged with the sequence backend.
 pub mod protocol;
+/// Typed record filtering and deterministic ordering, independent of storage and UI.
+pub mod query;
 /// Per-document interaction, layout and rendering state.
 pub(crate) mod view;
 /// Sequence-specific drawing components.

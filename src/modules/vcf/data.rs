@@ -1,4 +1,9 @@
 //! Disk-backed, bounded VCF indexing. Raw record/sample text stays in the source.
+/// SQL predicates and bounded queries over the persistent record index.
+mod query;
+/// Indexed genotype counters and explicit aggregate queries.
+mod statistics;
+
 use super::model::*;
 use super::reader::{invalid, parse_record, read_header};
 use crate::core::{
@@ -6,23 +11,33 @@ use crate::core::{
     source::Source,
 };
 use rusqlite::{Connection, OptionalExtension, params};
+use statistics::genotype_counts;
 use std::{
     collections::{HashMap, hash_map::DefaultHasher},
     fs::{self, File},
     hash::{Hash, Hasher},
     io::{self, BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 /// Decoded-source buffer capacity and the normal scan chunk size in bytes.
 const CHUNK: usize = 64 * 1024;
 /// Cache schema version included in the source-specific cache key.
-const SCHEMA: u64 = 3;
+const SCHEMA: u64 = 4;
 
 /// Wrap a SQLite error without losing its concrete cause for rollback decisions.
 fn sql(error: rusqlite::Error) -> io::Error {
-    io::Error::other(error)
+    let kind = if matches!(&error, rusqlite::Error::SqliteFailure(code, _) if code.code == rusqlite::ErrorCode::OperationInterrupted)
+    {
+        io::ErrorKind::Interrupted
+    } else {
+        io::ErrorKind::Other
+    };
+    io::Error::new(kind, error)
 }
 
 /// Committed scan progress and contig ordinals reconstructed from SQLite.
@@ -120,6 +135,8 @@ pub(crate) struct Dataset {
     _lock: File,
     /// Temporary cache directory to remove when shared-cache locking required isolation.
     private_cache: Option<PathBuf>,
+    /// Worker-level cancellation checked by potentially long query operations.
+    query_cancel: Arc<AtomicBool>,
 }
 
 impl Dataset {
@@ -166,7 +183,12 @@ impl Dataset {
                 alternates TEXT NOT NULL,
                 qual REAL,
                 filter TEXT NOT NULL,
-                kind INTEGER NOT NULL
+                kind INTEGER NOT NULL,
+                query_id TEXT NOT NULL,
+                gt_called INTEGER NOT NULL,
+                gt_missing INTEGER NOT NULL,
+                gt_partial INTEGER NOT NULL,
+                gt_unavailable INTEGER NOT NULL
             );
             CREATE UNIQUE INDEX IF NOT EXISTS contig_order ON records(contig, ordinal);
             CREATE INDEX IF NOT EXISTS loci ON records(contig, pos, id);",
@@ -197,6 +219,7 @@ impl Dataset {
             selected: None,
             _lock: lock,
             private_cache: private.then_some(directory),
+            query_cancel: Arc::new(AtomicBool::new(false)),
         };
         dataset.check_source()?;
         Ok(dataset)
@@ -213,6 +236,37 @@ impl Dataset {
     /// Return the underlying source compression label for file information.
     pub(crate) fn compression(&self) -> &str {
         self.reader.get_ref().compression()
+    }
+
+    /// Attach the worker's cancellation flag without affecting bounded index transactions.
+    pub(crate) fn set_query_cancel(&mut self, cancel: Arc<AtomicBool>) {
+        self.query_cancel = cancel;
+    }
+
+    /// Interrupt expensive reads/sorts when the UI pauses work or the worker shuts down.
+    /// The hook is removed before returning, so index rollback never inherits an interrupt.
+    pub(crate) fn cancellable<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> io::Result<T>,
+    ) -> io::Result<T> {
+        if self.query_cancel.load(Ordering::Relaxed) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "VCF query cancelled",
+            ));
+        }
+        let cancel = Arc::clone(&self.query_cancel);
+        self.db
+            .progress_handler(1000, Some(move || cancel.load(Ordering::Relaxed)));
+        let result = operation(self);
+        self.db.progress_handler(0, None::<fn() -> bool>);
+        if self.query_cancel.load(Ordering::Relaxed) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "VCF query cancelled",
+            ));
+        }
+        result
     }
 
     /// Scan a decoded-byte budget (at least one byte) in a SQLite transaction.
@@ -359,14 +413,17 @@ impl Dataset {
                     variant.kind
                 }
             });
+        let genotype_counts = genotype_counts(record);
         self.db
             .execute(
                 "INSERT INTO records (
                     id, contig, ordinal, pos, offset, bytes,
-                    ids, reference, alternates, qual, filter, kind
+                    ids, reference, alternates, qual, filter, kind,
+                    query_id,gt_called,gt_missing,gt_partial,gt_unavailable
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6,
-                    ?7, ?8, ?9, ?10, ?11, ?12
+                    ?7, ?8, ?9, ?10, ?11, ?12,
+                    ?13,?14,?15,?16,?17
                 )",
                 params![
                     self.progress.records,
@@ -381,6 +438,11 @@ impl Dataset {
                     record.qual,
                     short(&record.filter),
                     kind_code(kind),
+                    record.ids.join(";"),
+                    genotype_counts.called,
+                    genotype_counts.missing,
+                    genotype_counts.partial,
+                    genotype_counts.unavailable,
                 ],
             )
             .map_err(sql)?;
@@ -497,6 +559,11 @@ impl Dataset {
                 .optional()
                 .map_err(sql)?
         };
+        self.entry_range(row)
+    }
+
+    /// Read a selected source range, sharing the one-record cache across all query orders.
+    fn entry_range(&mut self, row: Option<(u64, u64, u64)>) -> io::Result<Option<Arc<VcfEntry>>> {
         let Some((id, offset, length)) = row else {
             return Ok(None);
         };

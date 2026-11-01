@@ -1,5 +1,6 @@
 //! Messages distinguish a viewport refresh from a user operation.
 use super::data::{Format, Progress, RecordMeta, RecordSummary, SequenceWindow, Stats};
+use super::query::RecordQuery;
 use std::sync::{Arc, atomic::AtomicBool};
 
 /// Requested sequence and record-list windows, tagged with the current viewport generation.
@@ -11,11 +12,17 @@ pub struct ViewRequest {
     pub file: usize,
     /// Zero-based selected record ID.
     pub record: u64,
+    /// Position of the selected row in the filtered/sorted result, independent of the source ID.
+    pub position: u64,
+    /// Preserve `record` across incremental reordering; false selects `position` instead.
+    pub anchor: bool,
+    /// Record predicates and ordering applied by the data layer.
+    pub query: Box<RecordQuery>,
     /// Zero-based sequence offset at which the requested window begins.
     pub start: u64,
     /// Requested number of sequence characters, capped by the backend.
     pub count: usize,
-    /// Zero-based first record ID requested for the record list.
+    /// Zero-based first result position requested for the record list.
     pub list_start: u64,
     /// Requested number of visible record summaries, capped by the backend.
     pub list_count: usize,
@@ -34,6 +41,8 @@ pub struct Snapshot {
     pub file_size: Option<u64>,
     /// Indexed summaries for the requested record-list window.
     pub records: Vec<RecordSummary>,
+    /// Number of matching indexed records; this is provisional while scanning continues.
+    pub matching_records: u64,
     /// Selected record metadata, absent if the scanner has not reached that record.
     pub record: Option<RecordMeta>,
     /// Available sequence and quality bytes beginning at the requested offset.
@@ -50,7 +59,7 @@ pub struct Snapshot {
 pub enum Request {
     /// Replace the target viewport without cancelling operations in the same file and record.
     View(ViewRequest),
-    /// Search record names from an inclusive record ID, wrapping after scanning stops.
+    /// Search filtered/sorted record names from an inclusive result position, wrapping after scanning stops.
     Search {
         /// Monotonic operation identity used to reject stale requests and replies.
         operation_id: u64,
@@ -58,7 +67,7 @@ pub enum Request {
         file: usize,
         /// Literal substring to find in indexed record names.
         query: String,
-        /// Inclusive zero-based starting record ID for the search.
+        /// Inclusive zero-based starting position in the current query result.
         after: u64,
         /// Operation-owned flag shared with the foreground view; cancellation is permanent.
         cancel: Arc<AtomicBool>,

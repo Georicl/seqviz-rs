@@ -23,6 +23,13 @@ pub(crate) fn text(app: &SequenceView) -> Vec<String> {
             "/               Partial record-name search",
             "n               Next matching record (wraps)",
             ":               Jump to a 1-based position in this sequence",
+            "f               Filter records; empty input clears all predicates",
+            "s               Cycle source / name / length / GC / quality / MAPQ order",
+            "Filter syntax   name=read minlen=100 maxlen=1000 mingc=30 maxgc=70",
+            "                minq=20 maxq=40 mapq=30 flag=0x1 noflag=0x904",
+            "Predicates use AND; GC/quality/length bounds require completed records.",
+            "Missing values do not match bounds and sort last; source ID breaks ties.",
+            "Name search and record navigation use the filtered/sorted list.",
             "",
             "SELECT AND COPY",
             "Drag / v        Select sequence; drag at an edge to scroll",
@@ -44,6 +51,7 @@ pub(crate) fn text(app: &SequenceView) -> Vec<String> {
             "Ctrl+c          Quit browser",
             "",
             "Statistics run when their page is opened. Unknown totals show +.",
+            "Statistics describe the whole indexed file, independently of list filters.",
             "Sequence positions and selections survive terminal resizing.",
             "Sources are read-only. Indexes are reused while the source is unchanged.",
             "SAM/BAM statistics count alignment records, including secondary and",
@@ -160,8 +168,8 @@ pub(crate) fn text(app: &SequenceView) -> Vec<String> {
             }
         }
         Page::Statistics => {
+            lines.push("Scope: entire file (list filters do not apply)".into());
             if let Some(stats) = &snapshot.stats {
-                let ready = stats.complete || stats.errors > 0 || snapshot.progress.error.is_some();
                 lines.push(format!(
                     "Status: {}",
                     if stats.complete {
@@ -180,30 +188,65 @@ pub(crate) fn text(app: &SequenceView) -> Vec<String> {
                     stats.sequence_records
                 ));
                 lines.push(format!("Errors: {}", stats.errors));
-                if ready {
-                    let unit = if stats.protein { "aa" } else { "bp" };
-                    lines.extend([
-                        format!("Total length: {} {unit}", stats.total_length),
-                        format!("Minimum length: {}", opt(stats.min_length)),
-                        format!("Maximum length: {}", opt(stats.max_length)),
-                        format!(
-                            "Mean length: {}",
-                            stats
-                                .mean_length
-                                .map(|v| format!("{v:.2}"))
-                                .unwrap_or_else(|| "n/a".into())
-                        ),
-                    ]);
-                    if snapshot.format.supports_n50() {
-                        lines.push(format!("N50: {}", opt(stats.n50)));
-                    }
-                    lines.push(format!(
-                        "GC: {}",
+                let unit = if stats.protein { "aa" } else { "bp" };
+                lines.extend([
+                    format!("Total length: {} {unit}", stats.total_length),
+                    format!("Minimum length: {}", opt(stats.min_length)),
+                    format!("Maximum length: {}", opt(stats.max_length)),
+                    format!(
+                        "Mean length: {}",
                         stats
-                            .gc
-                            .map(|v| format!("{v:.2}%"))
-                            .unwrap_or_else(|| "not applicable".into())
-                    ));
+                            .mean_length
+                            .map(|v| format!("{v:.2}"))
+                            .unwrap_or_else(|| "n/a".into())
+                    ),
+                ]);
+                if snapshot.format.supports_n50() {
+                    lines.push(format!("N50: {}", opt(stats.n50)));
+                }
+                lines.push(format!(
+                    "GC: {}",
+                    stats
+                        .gc
+                        .map(|v| format!("{v:.2}%"))
+                        .unwrap_or_else(|| "not applicable".into())
+                ));
+                lines.push("Measurements use completed records indexed so far.".into());
+                histogram_text(
+                    &mut lines,
+                    "Length distribution (records)",
+                    &stats.length_distribution,
+                );
+                histogram_text(
+                    &mut lines,
+                    "GC distribution (DNA records, %)",
+                    &stats.gc_distribution,
+                );
+                if let Some(quality) = &stats.quality {
+                    lines.extend([
+                        String::new(),
+                        format!("Records with quality: {}", quality.records),
+                        format!("Quality scores: {}", quality.scores),
+                        format!("Mean Phred (all scores): {:.2}", quality.mean),
+                        format!("Q30 (all scores): {:.2}%", quality.q30),
+                    ]);
+                    histogram_text(
+                        &mut lines,
+                        "Mean Phred distribution (records)",
+                        &stats.quality_distribution,
+                    );
+                }
+                if let Some(mapping) = &stats.mapping {
+                    lines.extend([
+                        String::new(),
+                        format!("Completed alignments: {}", mapping.alignments),
+                        format!("Mapped / unmapped: {} / {}", mapping.mapped, mapping.unmapped),
+                        format!("Primary: {}", mapping.primary),
+                        format!("Secondary: {}", mapping.secondary),
+                        format!("Supplementary: {}", mapping.supplementary),
+                        format!("Duplicate flag: {}", mapping.duplicate),
+                        "FLAG categories can overlap; primary excludes secondary and supplementary.".into(),
+                    ]);
                 }
                 if snapshot.format.is_alignment() {
                     lines.push("Every alignment is counted separately. Missing SEQ is excluded from length and GC; no deduplication.".into());
@@ -220,4 +263,28 @@ pub(crate) fn text(app: &SequenceView) -> Vec<String> {
 /// Render an optional integer metric, using n/a when no value is available.
 fn opt(value: Option<u64>) -> String {
     value.map(|v| v.to_string()).unwrap_or_else(|| "n/a".into())
+}
+
+/// Append all fixed bins with counts and compact bars scaled to the largest bin.
+fn histogram_text(
+    lines: &mut Vec<String>,
+    title: &str,
+    bins: &[crate::modules::sequence::data::HistogramBin],
+) {
+    let largest = bins.iter().map(|bin| bin.count).max().unwrap_or(0);
+    lines.push(String::new());
+    lines.push(title.into());
+    for bin in bins {
+        let width = if largest == 0 {
+            0
+        } else {
+            ((bin.count as f64 / largest as f64) * 20.0).round() as usize
+        };
+        lines.push(format!(
+            "  {:>22}: {:>10} {}",
+            bin.label,
+            bin.count,
+            "█".repeat(width)
+        ));
+    }
 }

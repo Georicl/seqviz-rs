@@ -6,20 +6,20 @@ use ratatui::{Terminal, backend::TestBackend};
 use tempfile::TempDir;
 
 /// A fully indexed temporary VCF connected to a document view without a worker thread.
-struct Fixture {
+pub(super) struct Fixture {
     /// Temporary source/cache lifetime guard.
     _directory: TempDir,
     /// Fully indexed source used to answer view requests synchronously.
-    dataset: Dataset,
+    pub(super) dataset: Dataset,
     /// Document under test.
-    view: VcfView,
+    pub(super) view: VcfView,
     /// Original first record used to assert lossless copying.
     first: String,
 }
 
 impl Fixture {
     /// Build a multi-ALT, two-sample source and load its first viewport.
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("variants.vcf");
         let first = format!(
@@ -62,7 +62,7 @@ impl Fixture {
     }
 
     /// Answer the queued viewport request synchronously from the fixture dataset.
-    fn refresh(&mut self) {
+    pub(super) fn refresh(&mut self) {
         self.view.request_view();
         let request = self
             .view
@@ -79,15 +79,23 @@ impl Fixture {
             .unwrap();
         let selected = self
             .dataset
-            .entry(request.contig.as_deref(), request.selected)
+            .query_entry(request.contig.as_deref(), &request.query, request.selected)
             .unwrap();
         let snapshot = Snapshot {
             rows: self
                 .dataset
-                .rows(request.contig.as_deref(), request.start, request.count)
+                .query_rows(
+                    request.contig.as_deref(),
+                    &request.query,
+                    request.start,
+                    request.count,
+                )
                 .unwrap(),
             selected,
-            total: self.dataset.total(request.contig.as_deref()).unwrap(),
+            total: self
+                .dataset
+                .query_total(request.contig.as_deref(), &request.query)
+                .unwrap(),
             contigs: self.dataset.contigs().unwrap(),
             header: self.dataset.header(),
             progress: self.dataset.progress(),
@@ -100,12 +108,12 @@ impl Fixture {
     }
 
     /// Send an unmodified key press through the document interface.
-    fn key(&mut self, code: KeyCode) {
+    pub(super) fn key(&mut self, code: KeyCode) {
         self.view.key(KeyEvent::new(code, KeyModifiers::NONE));
     }
 
     /// Extract the queued clipboard payload, operation ID and cancellation flag.
-    fn copied(&mut self) -> (String, u64, Arc<AtomicBool>) {
+    pub(super) fn copied(&mut self) -> (String, u64, Arc<AtomicBool>) {
         self.view
             .actions()
             .into_iter()

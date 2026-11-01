@@ -45,6 +45,8 @@ cargo run --release --locked -- test/test.fa test/alignments.bam test/variants.v
 | Shared input, cache and task services | `src/core/source.rs`, `src/core/cache.rs`, `src/core/tasks/` |
 | Sequence readers and persistent indexes | `src/modules/sequence/data/` |
 | VCF parsing, indexing and domain values | `src/modules/vcf/reader.rs`, `src/modules/vcf/data.rs`, `src/modules/vcf/model.rs` |
+| Record filter syntax and sort values | `src/modules/sequence/query.rs`, `src/modules/vcf/query.rs` |
+| Database queries and aggregate calculations | `src/modules/sequence/data/query.rs`, `src/modules/sequence/data/statistics.rs`, `src/modules/vcf/data/query.rs`, `src/modules/vcf/data/statistics.rs` |
 | Module registration, messages and sessions | `src/modules/registry.rs`, `src/modules/protocol.rs`, `src/modules/session.rs` |
 | Document interface and format-specific pages | `src/modules/view.rs`, `src/modules/sequence/view/`, `src/modules/vcf/view/` |
 | Reusable terminal components | `src/widgets/` |
@@ -52,6 +54,8 @@ cargo run --release --locked -- test/test.fa test/alignments.bam test/variants.v
 | Configuration, header attributes and text output | `src/app/config.rs`, `src/modules/sequence/config.rs`, `src/modules/sequence/palette.rs`, `src/modules/sequence/headers.rs`, `src/modules/sequence/output.rs` |
 
 Keep dependencies flowing from the application assembly points to domain modules and shared services. `app` owns global input, tabs and terminal output; `core` owns file, cache, task and clipboard mechanisms; `widgets` renders reusable UI; each module owns its parsing, domain values, queries, interaction and colours. New format-specific fields and components belong in their module. Register a module through `registry`, route its work through `session` and expose its page through `DocumentView`.
+
+Filter models describe user choices without depending on SQLite or terminal widgets. Data modules translate those choices into bound SQL and bounded result windows. A window position identifies a row in the current query; the source record ID remains stable when filtering, sorting or incremental indexing changes that position. Views own navigation and reject stale replies before changing their displayed state.
 
 Unit tests live beside the code. `tests/` contains integration tests, and `test/` holds the shared FASTA, SAM, BAM and VCF fixtures.
 

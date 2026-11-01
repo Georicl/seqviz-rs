@@ -14,6 +14,7 @@ mod tests;
 use self::layout::{Layout, SequenceLayout};
 use super::config::SequenceConfig;
 use super::protocol::{Request, Snapshot, Update, ViewRequest};
+use super::query::{RecordFilter, RecordQuery};
 use crate::modules::{
     protocol::{ModuleRequest, ModuleUpdate},
     view::{Action, DocumentView, InputPrompt, Status},
@@ -64,6 +65,8 @@ pub(crate) enum Input {
     Search(String),
     /// One-based sequence position being entered as text.
     Position(String),
+    /// Record predicates edited as whitespace-separated key=value clauses.
+    Filter(String),
 }
 
 /// Navigation and cached data retained independently for each document tab.
@@ -72,13 +75,21 @@ pub(crate) struct SequenceState {
     pub(crate) path: PathBuf,
     /// Zero-based selected record ID.
     pub(crate) record: u64,
+    /// Selected position in the filtered/sorted result, independent of the stable source ID.
+    pub(crate) position: u64,
+    /// Preserve the selected source ID when indexing changes the result order.
+    pub(crate) anchor: bool,
+    /// Typed predicates and ordering for this tab's list.
+    pub(crate) query: RecordQuery,
+    /// Last accepted filter expression, restored when the filter prompt opens.
+    pub(crate) filter_text: String,
     /// Zero-based sequence offset at the top of the target viewport.
     pub(crate) start: u64,
     /// Zero-based sequence coordinate of the keyboard cursor.
     pub(crate) cursor: u64,
     /// Inclusive zero-based sequence endpoints, retaining drag direction.
     pub(crate) selection: Option<(u64, u64)>,
-    /// Zero-based record ID at the top of the record list.
+    /// Zero-based result position at the top of the record list.
     pub(crate) list_start: u64,
     /// Most recent accepted viewport snapshot for this document.
     pub(crate) snapshot: Option<Box<Snapshot>>,
@@ -172,6 +183,10 @@ impl SequenceView {
             document: SequenceState {
                 path,
                 record: 0,
+                position: 0,
+                anchor: false,
+                query: RecordQuery::default(),
+                filter_text: String::new(),
                 start: 0,
                 cursor: 0,
                 selection: None,
@@ -231,11 +246,15 @@ impl SequenceView {
     /// Advance the viewport generation and queue the current record/list window request.
     pub(crate) fn request_view(&mut self) {
         self.token += 1;
+        self.set_background_cancelled(false);
         let tab = self.tab();
         self.send(Request::View(ViewRequest {
             token: self.token,
             file: self.file,
             record: tab.record,
+            position: tab.position,
+            anchor: tab.anchor,
+            query: Box::new(tab.query.clone()),
             start: tab.start,
             count: self.count(),
             list_start: tab.list_start,
@@ -244,28 +263,73 @@ impl SequenceView {
         self.dirty = false;
     }
     /// Cancel the active operation, select a record and reset sequence navigation while keeping it visible.
-    pub(crate) fn choose_record(&mut self, record: u64) {
+    pub(crate) fn choose_record(&mut self, position: u64) {
         self.cancel_operation();
         self.redraw = true;
         let height = self.hits.list.height.max(1) as u64;
         let tab = self.tab_mut();
         if let Some(snapshot) = &tab.snapshot
             && snapshot.progress.complete
-            && record >= snapshot.progress.records
+            && snapshot.request.query.as_ref() == &tab.query
+            && position >= snapshot.matching_records
         {
             return;
         }
-        tab.record = record;
+        tab.position = position;
+        tab.anchor = false;
+        if tab.query == RecordQuery::default() {
+            tab.record = position;
+        }
         tab.start = 0;
         tab.cursor = 0;
         tab.selection = None;
-        if record < tab.list_start {
-            tab.list_start = record;
+        if position < tab.list_start {
+            tab.list_start = position;
         }
-        if record >= tab.list_start + height {
-            tab.list_start = record + 1 - height;
+        if position >= tab.list_start + height {
+            tab.list_start = position + 1 - height;
         }
+        self.token += 1;
         self.dirty = true;
+    }
+    /// Replace the active filter, resetting list navigation while retaining its sort order.
+    pub(crate) fn apply_filter(&mut self, text: String) {
+        match RecordFilter::parse(&text) {
+            Ok(filter) => {
+                self.document.query.filter = filter;
+                self.document.filter_text = text;
+                self.reset_query();
+            }
+            Err(error) => self.document.message = error,
+        }
+    }
+    /// Cycle the supported record orderings without changing the tab's predicates.
+    pub(crate) fn cycle_sort(&mut self) {
+        let alignment = self
+            .document
+            .snapshot
+            .as_ref()
+            .is_some_and(|s| s.format.is_alignment());
+        self.document.query.sort = self.document.query.sort.next(alignment);
+        self.reset_query();
+    }
+    /// Start a new query at its first result and resume incremental discovery.
+    fn reset_query(&mut self) {
+        self.cancel_operation();
+        self.token += 1;
+        self.document.position = 0;
+        self.document.record = 0;
+        self.document.anchor = false;
+        self.document.list_start = 0;
+        self.document.start = 0;
+        self.document.cursor = 0;
+        self.document.selection = None;
+        self.document.pending_end = false;
+        self.document.message.clear();
+        self.drag = None;
+        self.set_background_cancelled(false);
+        self.dirty = true;
+        self.redraw = true;
     }
     /// Open an information page, reset its scroll/selection and request statistics when needed.
     pub(crate) fn open_page(&mut self, page: Page) {
@@ -282,6 +346,15 @@ impl SequenceView {
     pub(crate) fn copy(&mut self) {
         if !self.can_copy() {
             self.tab_mut().message = "Copy is disabled for SAM/BAM".into();
+            return;
+        }
+        if self.tab().snapshot.as_ref().is_none_or(|snapshot| {
+            snapshot.request.query.as_ref() != &self.tab().query
+                || snapshot.request.position != self.tab().position
+                || snapshot.request.record != self.tab().record
+                || snapshot.record.is_none()
+        }) {
+            self.tab_mut().message = "Waiting for the selected record".into();
             return;
         }
         let range = if self.focus == Focus::Sequence {
@@ -340,15 +413,23 @@ impl SequenceView {
         match update {
             Update::View(snapshot) => {
                 let file = snapshot.request.file;
-                if !self.enabled || file != self.file || snapshot.request.token != self.token {
+                if !self.enabled
+                    || file != self.file
+                    || snapshot.request.token != self.token
+                    || snapshot.request.query.as_ref() != &self.document.query
+                {
                     return;
                 }
+                self.document.record = snapshot.request.record;
+                self.document.position = snapshot.request.position;
+                self.document.list_start = snapshot.request.list_start;
+                self.document.anchor = snapshot.record.is_some();
                 if self.document.pending_end
                     && (snapshot.progress.complete || snapshot.progress.error.is_some())
                 {
                     self.document.pending_end = false;
                     if self.focus == Focus::Records {
-                        self.choose_record(snapshot.progress.records.saturating_sub(1));
+                        self.choose_record(snapshot.matching_records.saturating_sub(1));
                     } else if let Some(meta) = &snapshot.record {
                         self.document.start = meta.length.saturating_sub(self.count() as u64);
                         self.document.cursor = meta.length.saturating_sub(1);
@@ -368,7 +449,14 @@ impl SequenceView {
                 operation_id,
             } if self.matches_operation(file, operation_id, OperationKind::Search) => {
                 self.pending_operation = None;
-                self.choose_record(record);
+                self.cancel_operation();
+                self.document.record = record;
+                self.document.anchor = true;
+                self.document.start = 0;
+                self.document.cursor = 0;
+                self.document.selection = None;
+                self.token += 1;
+                self.dirty = true;
                 self.tab_mut().message = "Match found".into();
             }
             Update::Copied {
@@ -557,6 +645,10 @@ impl DocumentView for SequenceView {
             },
             Input::Position(text) => InputPrompt {
                 label: "Position (1-based): ",
+                text,
+            },
+            Input::Filter(text) => InputPrompt {
+                label: "Filter (key=value, empty clears): ",
                 text,
             },
         })

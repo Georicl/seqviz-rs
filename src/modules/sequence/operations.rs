@@ -2,6 +2,7 @@
 use super::backend::{ProgressKey, Slot};
 use super::data::Dataset;
 use super::protocol::Update;
+use super::query::RecordQuery;
 use std::{
     io,
     sync::{
@@ -13,13 +14,15 @@ use std::{
 
 /// Literal record-name search retried as new records become indexed.
 pub(super) struct SearchJob {
+    /// Filtering and order captured when the search begins.
+    pub record_query: RecordQuery,
     /// Monotonic operation identity echoed in success or failure updates.
     pub operation_id: u64,
     /// Tab index that requested the operation.
     pub file: usize,
     /// Literal substring to find in indexed record names.
     pub query: String,
-    /// First zero-based record ID included in the search; wrapping waits until scanning stops.
+    /// First zero-based query-result position included; wrapping waits until scanning stops.
     pub after: u64,
     /// Flag owned by this operation; once set, it remains cancelled.
     pub cancel: Arc<AtomicBool>,
@@ -34,23 +37,23 @@ impl SearchJob {
             return true;
         }
         let key = ProgressKey::from(&slot.dataset.progress());
-        if self.tried.as_ref().is_some_and(|last| {
-            last.records == key.records
-                && last.complete == key.complete
-                && last.errors == key.errors
-                && last.error == key.error
-        }) {
+        if self.tried.as_ref() == Some(&key) {
             return false;
         }
         self.tried = Some(key);
-        let result =
-            slot.dataset
-                .find_name_cancellable(&self.query, self.after, Arc::clone(&self.cancel));
+        let result = slot.dataset.find_name_in_query(
+            &self.record_query,
+            &self.query,
+            self.after,
+            Arc::clone(&self.cancel),
+        );
         let result = match result {
-            Ok(None) if stopped && self.after > 0 => {
-                slot.dataset
-                    .find_name_cancellable(&self.query, 0, Arc::clone(&self.cancel))
-            }
+            Ok(None) if stopped && self.after > 0 => slot.dataset.find_name_in_query(
+                &self.record_query,
+                &self.query,
+                0,
+                Arc::clone(&self.cancel),
+            ),
             result => result,
         };
         if self.cancel.load(Ordering::Relaxed) {

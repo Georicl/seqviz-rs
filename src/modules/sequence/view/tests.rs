@@ -22,6 +22,9 @@ fn app(path: PathBuf, cache: &std::path::Path) -> SequenceView {
             token: 1,
             file: 0,
             record: 0,
+            position: 0,
+            anchor: true,
+            query: Default::default(),
             start: 0,
             count: 1024,
             list_start: 0,
@@ -31,6 +34,7 @@ fn app(path: PathBuf, cache: &std::path::Path) -> SequenceView {
         compression: data.compression().into(),
         file_size: std::fs::metadata(&path).ok().map(|m| m.len()),
         records: data.records(0, 10).unwrap(),
+        matching_records: data.progress().records,
         record: data.record(0).unwrap(),
         window: data.read_range(0, 0, 1024).unwrap(),
         progress: data.progress(),
@@ -58,6 +62,76 @@ fn app(path: PathBuf, cache: &std::path::Path) -> SequenceView {
 /// Construct an unmodified key event for interaction tests.
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+/// Empty query results display neither a fictitious first row nor a source record ID.
+#[test]
+fn empty_results_have_zero_rows_and_no_selected_source_in_status() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("records.fa");
+    std::fs::write(&path, b">record\nACGT\n").unwrap();
+    let mut view = app(path, &directory.path().join("cache"));
+    let snapshot = view.document.snapshot.as_mut().unwrap();
+    snapshot.matching_records = 0;
+    snapshot.records.clear();
+    snapshot.record = None;
+    let status = view.status();
+    assert!(status.message.contains("row 0 / 0"));
+    assert!(status.message.contains("source #—"));
+}
+
+/// Filter and sort controls queue typed queries; invalid input preserves the accepted predicate.
+#[test]
+fn filter_prompt_and_sort_cycle_reset_result_navigation() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("records.fa");
+    std::fs::write(&path, b">z\nA\n>a\nGG\n").unwrap();
+    let mut app = app(path, &directory.path().join("cache"));
+    app.key(key(KeyCode::Char('f')));
+    assert!(matches!(app.input, Some(Input::Filter(_))));
+    app.input = Some(Input::Filter("name=a minlen=2".into()));
+    app.key(key(KeyCode::Enter));
+    assert_eq!(app.document.query.filter.name, "a");
+    assert!(!app.document.anchor);
+    app.key(key(KeyCode::Char('s')));
+    assert_eq!(
+        app.document.query.sort.key,
+        crate::modules::sequence::query::SortKey::Name
+    );
+    app.request_view();
+    assert!(app.actions.iter().any(|action| matches!(action,
+        Action::Request(ModuleRequest::Sequence(envelope)) if matches!(&envelope.payload,
+            Request::View(request) if request.position == 0 && request.query.filter.min_length == Some(2)))));
+    let accepted = app.document.query.clone();
+    app.input = Some(Input::Filter("minq=NaN".into()));
+    app.key(key(KeyCode::Enter));
+    assert_eq!(app.document.query, accepted);
+    assert!(app.document.message.contains("between"));
+    app.input = Some(Input::Filter(String::new()));
+    app.key(key(KeyCode::Enter));
+    assert_eq!(
+        app.document.query.filter,
+        crate::modules::sequence::query::RecordFilter::default()
+    );
+    assert_eq!(app.document.query.sort, accepted.sort);
+}
+
+/// A queued reply from before navigation cannot restore its older selection or query.
+#[test]
+fn navigation_and_query_changes_reject_in_flight_snapshots_immediately() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("records.fa");
+    std::fs::write(&path, b">first\nA\n>second\nGG\n").unwrap();
+    let mut app = app(path, &directory.path().join("cache"));
+    let old = app.document.snapshot.as_ref().unwrap().clone();
+    app.choose_record(1);
+    app.apply_update(Update::View(old.clone()));
+    assert_eq!((app.document.position, app.document.record), (1, 1));
+    app.apply_filter("name=second".into());
+    app.apply_update(Update::View(old));
+    assert_eq!(app.document.query.filter.name, "second");
+    assert_eq!(app.document.position, 0);
+    assert!(app.dirty);
 }
 
 /// Check drag endpoints remain sequence coordinates when terminal width changes.
