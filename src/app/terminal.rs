@@ -28,6 +28,11 @@ impl Drop for TerminalGuard {
 }
 
 /// Own the terminal session and interleave input, worker updates, timed ticks and redraws.
+///
+/// # Arguments
+///
+/// - `paths`: Input file paths in command-line order.
+/// - `config`: Resolved application, sequence and VCF settings for this terminal session.
 pub fn run(paths: Vec<PathBuf>, config: Config) -> io::Result<()> {
     let worker = Worker::start(paths.clone(), config::cache_directory());
     let mut app = App::new(paths, config, worker);
@@ -67,6 +72,10 @@ pub fn run(paths: Vec<PathBuf>, config: Config) -> io::Result<()> {
 }
 
 /// Write a prepared clipboard escape on the UI thread and flush terminal output.
+///
+/// # Arguments
+///
+/// - `payload`: Complete, pre-encoded OSC 52 escape sequence to write to the terminal.
 pub fn write_osc52(payload: &str) -> io::Result<()> {
     let mut output = io::stdout().lock();
     if !output.is_terminal() {

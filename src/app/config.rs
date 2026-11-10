@@ -13,6 +13,12 @@ use std::{
 };
 
 /// Resolved application theme and per-module display settings.
+///
+/// # Fields
+///
+/// - `theme`: Colours for application chrome and shared widgets.
+/// - `sequence`: Display preferences and content colours for sequence documents.
+/// - `vcf`: Variant-browser layout and colour settings.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     /// Colours for application chrome and shared widgets.
@@ -54,11 +60,20 @@ impl Config {
     }
 
     /// Load a specific TOML file and resolve referenced palettes relative to that file.
+    ///
+    /// # Arguments
+    ///
+    /// - `path`: Path of the TOML configuration file, used as the base for relative palette paths.
     pub fn load_from(path: &Path) -> io::Result<Self> {
         Self::parse(&fs::read_to_string(path)?, path)
     }
 
     /// Merge validated settings with defaults and share the nucleotide palette with VCF.
+    ///
+    /// # Arguments
+    ///
+    /// - `text`: TOML configuration contents to merge with defaults.
+    /// - `path`: Path of the TOML configuration file, used as the base for relative palette paths.
     fn parse(text: &str, path: &Path) -> io::Result<Self> {
         let raw: RawConfig =
             toml::from_str(text).map_err(|e| invalid(format!("{}: {e}", path.display())))?;
@@ -102,6 +117,12 @@ impl Config {
 }
 
 /// TOML sections accepted before theme values and relative palette paths are resolved.
+///
+/// # Fields
+///
+/// - `display`: Legacy TOML section name for sequence display preferences.
+/// - `theme`: Optional chrome colours and external content palette path.
+/// - `vcf`: VCF-specific display and colour overrides.
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawConfig {
@@ -114,6 +135,16 @@ struct RawConfig {
 }
 
 /// Optional theme overrides and the path to a separate sequence content palette.
+///
+/// # Fields
+///
+/// - `content`: Palette path resolved relative to the configuration file.
+/// - `background`: Override for the page background.
+/// - `foreground`: Override for normal text.
+/// - `muted`: Override for secondary text and hints.
+/// - `border`: Override for inactive panel borders.
+/// - `focus`: Override for focused elements.
+/// - `selection`: Override for selection backgrounds.
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawTheme {
@@ -134,6 +165,10 @@ struct RawTheme {
 }
 
 /// Create a configuration validation error with `InvalidData` kind.
+///
+/// # Arguments
+///
+/// - `message`: Diagnostic message stored in the returned invalid-data error.
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
