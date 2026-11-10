@@ -21,6 +21,10 @@ use crate::{core::paths, modules::registry};
 use std::io::{self, IsTerminal, Write};
 
 /// Start the terminal browser when stdin and stdout are terminals; otherwise stream output.
+///
+/// # Arguments
+///
+/// - `paths`: Input file paths in command-line order.
 pub fn run(paths: Vec<std::path::PathBuf>) -> io::Result<()> {
     if io::stdout().is_terminal() && io::stdin().is_terminal() {
         return terminal::run(paths, config::Config::load()?);

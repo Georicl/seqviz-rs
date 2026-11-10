@@ -20,6 +20,12 @@ use std::{
 };
 
 /// A stable file slot with an independent document view, even for alias paths.
+///
+/// # Fields
+///
+/// - `path`: Original input path used for display and format probing.
+/// - `closed`: Whether this stable tab slot has been closed.
+/// - `view`: Independent page state, including for tabs sharing a dataset.
 pub(crate) struct Tab {
     /// Original input path used for display and format probing.
     pub path: PathBuf,
@@ -29,6 +35,18 @@ pub(crate) struct Tab {
     pub view: Box<dyn DocumentView>,
 }
 /// Owns tab navigation, document views, worker routing and clipboard delivery.
+///
+/// # Fields
+///
+/// - `tabs`: Stable input slots; closed tabs remain in the vector.
+/// - `active`: Index of the currently displayed open tab.
+/// - `config`: Resolved application and module settings.
+/// - `hits`: Current terminal regions for drawing and mouse hit testing.
+/// - `redraw`: Whether application chrome needs repainting.
+/// - `quit`: Whether the terminal loop should exit.
+/// - `worker`: Background session shared by all tabs.
+/// - `clipboard`: Off-thread clipboard preparation and system-copy service.
+/// - `factory`: Creates loading and domain pages with shared preferences and operation IDs.
 pub(crate) struct App {
     /// Stable input slots; closed tabs remain in the vector.
     pub tabs: Vec<Tab>,
@@ -51,6 +69,12 @@ pub(crate) struct App {
 }
 impl App {
     /// Create loading views in input order and share theme settings and operation IDs.
+    ///
+    /// # Arguments
+    ///
+    /// - `paths`: Input file paths in command-line order.
+    /// - `config`: Resolved application and document settings used to create the tab pages.
+    /// - `worker`: Background worker used to send requests and receive results.
     pub fn new(paths: Vec<PathBuf>, config: Config, worker: Worker) -> Self {
         let clock = Arc::new(AtomicU64::new(0));
         let factory = registry::ViewFactory::new(
@@ -97,6 +121,10 @@ impl App {
             .collect()
     }
     /// Recalculate application regions and prepare the active page when it fits.
+    ///
+    /// # Arguments
+    ///
+    /// - `area`: Terminal rectangle available for this layout or component.
     pub fn prepare_frame(&mut self, area: Rect) {
         let next = layout::calculate(area);
         if self.hits.area != area {
@@ -183,6 +211,10 @@ impl App {
         self.flush_actions();
     }
     /// Deactivate the old page, flush its actions and activate a valid open destination.
+    ///
+    /// # Arguments
+    ///
+    /// - `next`: Stable ID of the open tab to activate.
     pub fn switch_tab(&mut self, next: usize) {
         if next == self.active || next >= self.tabs.len() || self.tabs[next].closed {
             return;
@@ -194,6 +226,10 @@ impl App {
         self.redraw = true;
     }
     /// Move to the next open tab in the chosen direction, wrapping at either end.
+    ///
+    /// # Arguments
+    ///
+    /// - `backwards`: Whether to navigate in reverse order, wrapping at the beginning.
     pub fn cycle_tab(&mut self, backwards: bool) {
         let n = self.tabs.len();
         for step in 1..=n {
@@ -259,6 +295,11 @@ impl App {
             .collect()
     }
     /// Map terminal coordinates to the visible tab ID using the rendering geometry.
+    ///
+    /// # Arguments
+    ///
+    /// - `x`: Zero-based terminal column of the pointer.
+    /// - `y`: Zero-based terminal row of the pointer.
     pub fn tab_hit(&self, x: u16, y: u16) -> Option<usize> {
         widgets::tabs::hit(
             &widgets::tabs::layout(self.hits.tabs, &self.open_tabs(), self.active),
