@@ -12,7 +12,7 @@
 /.idea/
 /.codex/
 /.agents/
-/.nvimlog
+.nvimlog
 # Environment variables and private local configuration
 .env
 .env.*
