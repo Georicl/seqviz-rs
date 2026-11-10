@@ -3,6 +3,11 @@ use super::palette::ContentPalette;
 use serde::Deserialize;
 
 /// Display preferences for sequence documents, independent of the shared application theme.
+///
+/// # Fields
+///
+/// - `show_quality`: Show an aligned quality-character row when a record has quality data.
+/// - `palette`: Sequence colours loaded separately from the display settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SequenceConfig {

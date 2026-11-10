@@ -2,6 +2,22 @@
 use ratatui::layout::Rect;
 
 /// Prepared terminal rectangles and sequence-to-cell geometry for rendering and hit testing.
+///
+/// # Fields
+///
+/// - `area`: Complete document body rectangle supplied by the application shell.
+/// - `left`: Record-list pane including its border.
+/// - `right`: Sequence pane including its border.
+/// - `list`: Inner record-list rectangle used for row rendering and pointer selection.
+/// - `sequence_inner`: Sequence-pane interior before reserving the record-details rows.
+/// - `sequence`: Base and quality rows including the coordinate gutter.
+/// - `details`: Number of rows reserved for record metadata above the sequence.
+/// - `bases_per_line`: Sequence characters available per row after the gutter.
+/// - `sequence_rows`: Number of complete base rows, excluding paired quality rows.
+/// - `stride`: Terminal rows occupied by a base row and its optional quality row.
+/// - `gutter`: Columns reserved for one-based sequence positions.
+/// - `info`: Inner rectangle available to an information-page overlay.
+/// - `too_small`: Whether the body is below the minimum supported dimensions.
 #[derive(Default)]
 pub(crate) struct Layout {
     /// Complete document body rectangle supplied by the application shell.
@@ -33,6 +49,13 @@ pub(crate) struct Layout {
 }
 
 /// Record metadata and display settings that determine sequence row geometry.
+///
+/// # Fields
+///
+/// - `known_length`: Currently indexed sequence length, used to size the coordinate gutter.
+/// - `start`: Zero-based sequence offset requested at the top of the viewport.
+/// - `has_quality`: Whether the current record supplies quality characters.
+/// - `show_quality`: Whether the user has enabled aligned quality-character rows.
 pub(crate) struct SequenceLayout {
     /// Currently indexed sequence length, used to size the coordinate gutter.
     pub known_length: Option<u64>,
@@ -45,6 +68,12 @@ pub(crate) struct SequenceLayout {
 }
 
 /// Allocate record and sequence panes, reserving coordinate and optional quality-row space.
+///
+/// # Arguments
+///
+/// - `area`: Terminal rectangle available for this layout or component.
+/// - `view`: Sequence layout inputs, including the known record length, quality visibility and
+///   display limits.
 pub(crate) fn calculate(area: Rect, view: SequenceLayout) -> Layout {
     if area.width < 30 || area.height < 5 {
         return Layout {
@@ -96,6 +125,10 @@ pub(crate) fn calculate(area: Rect, view: SequenceLayout) -> Layout {
 }
 
 /// Remove a one-cell border from a rectangle with saturating inner dimensions.
+///
+/// # Arguments
+///
+/// - `area`: Terminal rectangle available for this layout or component.
 fn inset(area: Rect) -> Rect {
     Rect::new(
         area.x + 1,
@@ -108,6 +141,13 @@ fn inset(area: Rect) -> Rect {
 impl Layout {
     /// Map a pointer to the target viewport, independently of loaded window data.
     /// Selection endpoints are zero-based sequence coordinates; gutters are excluded.
+    ///
+    /// # Arguments
+    ///
+    /// - `start`: Zero-based sequence coordinate at which the requested interval begins.
+    /// - `known_length`: Number of sequence symbols currently indexed for the selected record.
+    /// - `x`: Zero-based terminal column of the pointer.
+    /// - `y`: Zero-based terminal row of the pointer.
     pub fn sequence_position(&self, start: u64, known_length: u64, x: u16, y: u16) -> Option<u64> {
         if self.sequence.width == 0
             || self.sequence_rows == 0

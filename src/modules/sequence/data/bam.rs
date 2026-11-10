@@ -8,6 +8,27 @@ use super::{
 };
 
 /// Next BAM field to decode; each phase may span multiple scan steps.
+///
+/// # Variants
+///
+/// - `Magic`: Validate the BAM signature.
+/// - `HeaderLength`: Read the textual header length.
+/// - `HeaderText`: Skip the textual header within the scan budget.
+/// - `ReferenceCount`: Read the number of reference dictionary entries.
+/// - `ReferenceNameLength`: Read the next reference name length including its NUL terminator.
+/// - `ReferenceName`: Collect the NUL-terminated reference name.
+/// - `ReferenceLength`: Read the reference sequence length and store its dictionary entry.
+/// - `RecordSize`: Read the next alignment block size or accept clean end of input.
+/// - `Core`: Collect the 32 fixed alignment bytes.
+/// - `Name`: Collect the alignment read name.
+/// - `Cigar`: Decode the packed core CIGAR operations.
+/// - `Sequence`: Decode packed nucleotide nibbles into sequence spans.
+/// - `Quality`: Validate missing or numeric quality and emit quality spans.
+/// - `AuxHeader`: Read an optional field tag and type, or complete the alignment.
+/// - `AuxScalar`: Decode a single optional-field value.
+/// - `AuxString`: Collect a NUL-terminated optional string.
+/// - `AuxArrayHeader`: Read an optional array subtype and element count.
+/// - `AuxArray`: Decode array elements, including the long-CIGAR CG tag.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
     /// Validate the BAM signature.
@@ -49,6 +70,30 @@ enum Phase {
 }
 
 /// Incremental BAM decoder retaining partial fields, reference progress and alignment metadata.
+///
+/// # Fields
+///
+/// - `phase`: Next field or stream section to decode.
+/// - `buffer`: Partial fixed-width or name field retained across calls.
+/// - `remaining`: Bytes remaining in the current header, sequence or quality section.
+/// - `references`: Number of entries declared in the BAM reference dictionary.
+/// - `reference`: Zero-based reference dictionary entry currently being read.
+/// - `name`: Decoded reference name awaiting its length.
+/// - `record_end`: Exclusive logical-byte end of the current alignment block, or zero outside one.
+/// - `core`: The current alignment's 32-byte fixed core.
+/// - `name_len`: Read-name byte length including the terminating NUL.
+/// - `cigar_count`: Core CIGAR operations still to decode.
+/// - `sequence_len`: Declared number of sequence symbols.
+/// - `sequence_done`: Sequence symbols already decoded, excluding the unused final nibble.
+/// - `quality_missing`: Whether the first quality fragment declared all qualities missing.
+/// - `cigar`: Decoded core CIGAR, replaced by CG when a long CIGAR is supplied.
+/// - `fields`: Ordered alignment and auxiliary fields accumulated for this record.
+/// - `aux_tag`: Current two-character auxiliary tag.
+/// - `aux_type`: Current auxiliary value type byte.
+/// - `aux_subtype`: Current auxiliary array element type.
+/// - `aux_value`: Display value being assembled for an auxiliary string or array.
+/// - `aux_count`: Auxiliary array elements still to decode.
+/// - `aux_cigar`: CIGAR operations decoded from a CG:B:I array.
 pub(super) struct BamScanner {
     /// Next field or stream section to decode.
     phase: Phase,
@@ -96,6 +141,10 @@ pub(super) struct BamScanner {
 
 impl BamScanner {
     /// Create a decoder at the BAM header or at an alignment boundary when the header is cached.
+    ///
+    /// # Arguments
+    ///
+    /// - `header_done`: Whether a cached BAM header permits resuming at an alignment boundary.
     pub fn new(header_done: bool) -> Self {
         Self {
             phase: if header_done {
@@ -128,6 +177,12 @@ impl BamScanner {
 
     /// Consume at most `budget` logical bytes, preserving partial fields between calls.
     /// Return `true` only at a clean alignment boundary at end of input.
+    ///
+    /// # Arguments
+    ///
+    /// - `input`: Buffered source from which the next logical input bytes are consumed.
+    /// - `records`: Sink receiving parsed record metadata, decoded spans and scan boundaries.
+    /// - `budget`: Maximum number of logical source bytes to consume in this scan step.
     pub fn step<R: BufRead>(
         &mut self,
         input: &mut ScanInput<'_, R>,
@@ -444,6 +499,11 @@ impl BamScanner {
     }
 
     /// Persist the first alignment offset and advance from header parsing to record sizes.
+    ///
+    /// # Arguments
+    ///
+    /// - `records`: Sink receiving parsed record metadata, decoded spans and scan boundaries.
+    /// - `position`: Logical source-byte offset of the first alignment after the BAM header.
     fn end_header(&mut self, records: &mut impl RecordSink, position: u64) -> io::Result<()> {
         records.finish_header(position)?;
         self.phase = Phase::RecordSize;
@@ -451,6 +511,11 @@ impl BamScanner {
     }
 
     /// Read a bounded logical-byte fragment, rejecting truncation and alignment-block overruns.
+    ///
+    /// # Arguments
+    ///
+    /// - `input`: Buffered source from which the next logical input bytes are consumed.
+    /// - `amount`: Maximum number of logical bytes to read from the current BAM field.
     fn read<R: BufRead>(&self, input: &mut ScanInput<'_, R>, amount: usize) -> io::Result<Vec<u8>> {
         if self.record_end > 0 && input.position() + amount as u64 > self.record_end {
             return Err(invalid("BAM field exceeds its alignment block"));
@@ -463,6 +528,12 @@ impl BamScanner {
     }
 
     /// Accumulate up to `needed` field bytes within the remaining budget and report completion.
+    ///
+    /// # Arguments
+    ///
+    /// - `input`: Buffered source from which the next logical input bytes are consumed.
+    /// - `needed`: Total number of bytes required to complete the buffered BAM field.
+    /// - `budget`: Maximum number of logical source bytes to consume in this scan step.
     fn fill<R: BufRead>(
         &mut self,
         input: &mut ScanInput<'_, R>,
@@ -482,6 +553,10 @@ impl BamScanner {
     }
 
     /// Translate fixed BAM fields into display metadata, converting positions to SAM coordinates.
+    ///
+    /// # Arguments
+    ///
+    /// - `records`: Sink receiving parsed record metadata, decoded spans and scan boundaries.
     fn core_fields(&self, records: &impl RecordSink) -> io::Result<Vec<(String, String)>> {
         let reference = records.reference_name(i32_at(&self.core, 0))?;
         let mate = records.reference_name(i32_at(&self.core, 20))?;
@@ -512,6 +587,10 @@ impl BamScanner {
 }
 
 /// Decode a UTF-8 BAM name with exactly one terminating NUL and no embedded NULs.
+///
+/// # Arguments
+///
+/// - `bytes`: BAM name bytes, including the required terminating NUL.
 fn nul_string(bytes: &[u8]) -> io::Result<String> {
     let bytes = bytes
         .strip_suffix(&[0])
@@ -522,19 +601,41 @@ fn nul_string(bytes: &[u8]) -> io::Result<String> {
     String::from_utf8(bytes.to_vec()).map_err(|_| invalid("BAM name is not UTF-8"))
 }
 /// Decode a signed little-endian length or count, rejecting negative values.
+///
+/// # Arguments
+///
+/// - `bytes`: Four-byte little-endian signed count or length to validate.
+/// - `field`: BAM field name included in validation errors.
 fn nonnegative(bytes: &[u8], field: &str) -> io::Result<usize> {
     usize::try_from(i32_at(bytes, 0)).map_err(|_| invalid(format!("Negative {field}")))
 }
 /// Read a four-byte little-endian unsigned value from an already-sized field buffer.
+///
+/// # Arguments
+///
+/// - `bytes`: Already validated field buffer containing at least four bytes at the requested
+///   offset.
+/// - `offset`: Zero-based byte offset of the four-byte integer within `bytes`.
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
 /// Read a four-byte little-endian signed value from an already-sized field buffer.
+///
+/// # Arguments
+///
+/// - `bytes`: Already validated field buffer containing at least four bytes at the requested
+///   offset.
+/// - `offset`: Zero-based byte offset of the four-byte integer within `bytes`.
 fn i32_at(bytes: &[u8], offset: usize) -> i32 {
     i32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
 
 /// Append one packed BAM CIGAR operation, rejecting unknown operations and zero lengths.
+///
+/// # Arguments
+///
+/// - `output`: CIGAR string to which the decoded operation is appended.
+/// - `value`: Packed BAM operation containing its length and four-bit operation code.
 fn cigar_op(output: &mut String, value: u32) -> io::Result<()> {
     let operation = b"MIDNSHP=X"
         .get((value & 15) as usize)
@@ -548,6 +649,10 @@ fn cigar_op(output: &mut String, value: u32) -> io::Result<()> {
     Ok(())
 }
 /// Return the byte width of a supported BAM auxiliary scalar type.
+///
+/// # Arguments
+///
+/// - `kind`: BAM auxiliary scalar type code.
 fn scalar_size(kind: u8) -> io::Result<usize> {
     match kind {
         b'A' | b'c' | b'C' => Ok(1),
@@ -558,6 +663,11 @@ fn scalar_size(kind: u8) -> io::Result<usize> {
     }
 }
 /// Format one little-endian BAM auxiliary scalar as its display value.
+///
+/// # Arguments
+///
+/// - `kind`: BAM auxiliary scalar type code.
+/// - `bytes`: Little-endian bytes of one scalar of the specified type.
 fn scalar_value(kind: u8, bytes: &[u8]) -> io::Result<String> {
     Ok(match kind {
         b'A' => char::from(bytes[0]).to_string(),

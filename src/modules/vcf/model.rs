@@ -1,6 +1,16 @@
 //! VCF values shared by the data backend and document view.
 
 /// Parsed header metadata together with the untouched original header text.
+///
+/// # Fields
+///
+/// - `version`: Validated VCF version string, including the VCFv prefix.
+/// - `samples`: Sample names in original column order.
+/// - `contigs`: Distinct declared contigs in header order.
+/// - `definitions`: Structured metadata entries that declare an ID.
+/// - `raw`: Original header lines, including their original line endings.
+/// - `source`: Value of the last source metadata line, when present.
+/// - `reference`: Value of the last reference metadata line, when present.
 #[derive(Clone, Debug, Default)]
 pub struct VcfHeader {
     /// Validated VCF version string, including the VCFv prefix.
@@ -23,6 +33,15 @@ pub struct VcfHeader {
 pub type Header = VcfHeader;
 
 /// One structured metadata declaration with its original header line.
+///
+/// # Fields
+///
+/// - `kind`: Metadata category, such as INFO, FORMAT, FILTER or contig.
+/// - `id`: Declared ID within the metadata category.
+/// - `number`: Original Number token, retaining symbolic and local-allele cardinalities.
+/// - `value_type`: Declared Type token, if applicable.
+/// - `description`: Decoded Description text, if present.
+/// - `raw`: Original metadata line without its line ending.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FieldDefinition {
     /// Metadata category, such as INFO, FORMAT, FILTER or contig.
@@ -40,6 +59,18 @@ pub struct FieldDefinition {
 }
 
 /// Fixed VCF fields plus original text for lazy INFO and sample access.
+///
+/// # Fields
+///
+/// - `raw`: Original record without the terminating CR/LF; all TABs remain intact.
+/// - `chrom`: Original CHROM identifier.
+/// - `pos`: Original VCF POS coordinate; zero is preserved for a telomeric position.
+/// - `ids`: Semicolon-separated identifiers; an ID field of dot becomes an empty list.
+/// - `reference`: Original REF allele string.
+/// - `alternates`: ALT alleles in source order; a dot becomes an empty list.
+/// - `qual`: Finite, nonnegative QUAL value, or None for a missing dot.
+/// - `filter`: Original FILTER text, retaining PASS, dot and named filters.
+/// - `format`: FORMAT keys in sample-value order; a missing dot produces an empty list.
 #[derive(Clone, Debug)]
 pub struct VcfRecord {
     /// Original record without the terminating CR/LF; all TABs remain intact.
@@ -81,6 +112,11 @@ impl VcfRecord {
 
     /// Materialize one requested sample page, without decoding other sample columns.
     /// `start` is a zero-based sample index; omitted trailing FORMAT values become dots.
+    ///
+    /// # Arguments
+    ///
+    /// - `start`: Zero-based index of the first sample column to decode.
+    /// - `count`: Maximum number of sample columns to decode.
     pub fn sample_values(&self, start: usize, count: usize) -> Vec<SampleValue> {
         self.raw
             .split('\t')
@@ -100,6 +136,12 @@ impl VcfRecord {
 }
 
 /// One sample column decoded into values in FORMAT order.
+///
+/// # Fields
+///
+/// - `index`: Zero-based sample index in the header.
+/// - `values`: Original colon-separated values, padded with dots for omitted trailing FORMAT
+///   fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SampleValue {
     /// Zero-based sample index in the header.
@@ -109,6 +151,18 @@ pub struct SampleValue {
 }
 
 /// Display classification inferred from REF/ALT syntax and allele lengths.
+///
+/// # Variants
+///
+/// - `Snv`: Single-base REF and ALT alleles.
+/// - `Mnv`: Equal-length literal alleles longer than one base.
+/// - `Insertion`: Literal ALT longer than REF.
+/// - `Deletion`: Literal ALT shorter than REF.
+/// - `Symbolic`: Angle-bracket symbolic allele, such as `<DEL>`.
+/// - `Breakend`: Paired bracket notation or a leading/trailing-dot single breakend.
+/// - `SpanningDeletion`: The `*` allele representing a spanning deletion.
+/// - `Mixed`: Record summary whose ALT alleles have different classifications.
+/// - `Other`: Missing or otherwise unclassified allele.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VariantKind {
     /// Single-base REF and ALT alleles.
@@ -149,6 +203,14 @@ impl VariantKind {
 }
 
 /// Classification of one ALT allele with its original genotype allele index.
+///
+/// # Fields
+///
+/// - `allele_index`: One-based ALT index used by genotype alleles; zero denotes REF elsewhere.
+/// - `alternate`: Original ALT allele text.
+/// - `kind`: Classification inferred for this ALT independently of the other alleles.
+/// - `length_change`: ALT minus REF length for literal sequence alleles; absent for structural
+///   symbols.
 #[derive(Clone, Debug)]
 pub struct VariantInfo {
     /// One-based ALT index used by genotype alleles; zero denotes REF elsewhere.
@@ -162,6 +224,12 @@ pub struct VariantInfo {
 }
 
 /// A selected record, per-ALT classifications and optional graph annotations.
+///
+/// # Fields
+///
+/// - `record`: Complete selected record, including original text.
+/// - `variants`: One classification per ALT allele in source order.
+/// - `graph`: Annotations supplied only by an explicitly supported graph adapter.
 #[derive(Clone, Debug)]
 pub struct VcfEntry {
     /// Complete selected record, including original text.
@@ -173,6 +241,20 @@ pub struct VcfEntry {
 }
 
 /// Fixed display fields only: no sample or INFO objects are kept in the index.
+///
+/// # Fields
+///
+/// - `id`: Zero-based record ID in source order across all contigs.
+/// - `ordinal`: Zero-based position in the current filtered table; equals id without a contig
+///   filter.
+/// - `chrom`: Contig identifier used for table display and filtering.
+/// - `pos`: Original VCF POS coordinate.
+/// - `ids`: Identifier text shortened to at most 64 characters.
+/// - `reference`: REF display text shortened to at most 64 characters.
+/// - `alternates`: Comma-joined ALT display text shortened to at most 64 characters.
+/// - `qual`: QUAL value, or None for a missing dot.
+/// - `filter`: FILTER display text shortened to at most 64 characters.
+/// - `kind`: Common ALT classification, Mixed for differing kinds, or Other when ALT is absent.
 #[derive(Clone, Debug)]
 pub struct RecordSummary {
     /// Zero-based record ID in source order across all contigs.
@@ -198,6 +280,11 @@ pub struct RecordSummary {
 }
 
 /// A contig name and its currently indexed record count.
+///
+/// # Fields
+///
+/// - `name`: Original contig identifier.
+/// - `records`: Number of records currently indexed for this contig.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContigSummary {
     /// Original contig identifier.
@@ -207,6 +294,16 @@ pub struct ContigSummary {
 }
 
 /// Decoded-source scan progress and any input or backend error shown to the view.
+///
+/// # Fields
+///
+/// - `records`: Number of successfully indexed records.
+/// - `scanned_bytes`: Decoded byte position reached; a reopened index resumes at a complete-line
+///   boundary.
+/// - `complete`: Whether scanning reached EOF and completed the source index.
+/// - `errors`: Number of reported input errors.
+/// - `error`: Input error with source context, or a backend failure attached to a snapshot.
+/// - `line`: Number of physical lines processed, including the header and any failing record.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Progress {
     /// Number of successfully indexed records.

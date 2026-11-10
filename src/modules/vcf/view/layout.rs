@@ -2,6 +2,17 @@
 use ratatui::layout::Rect;
 
 /// Prepared terminal rectangles shared by rendering and pointer hit testing.
+///
+/// # Fields
+///
+/// - `area`: Entire document content rectangle.
+/// - `header`: Version, counts and current-locus lines.
+/// - `table`: Variant table including its border and column heading.
+/// - `rows`: Variant data rows, excluding border and column heading.
+/// - `details`: Detail panel including its border, tabs and heading.
+/// - `detail_tabs`: Single row of INFO, Samples and Raw tab labels.
+/// - `detail_heading`: Column headings for the active detail representation.
+/// - `detail_body`: Visible detail text and pointer-selection area.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Layout {
     /// Entire document content rectangle.
@@ -23,6 +34,10 @@ pub(super) struct Layout {
 }
 
 /// Remove a one-cell border, saturating widths and heights for tiny terminals.
+///
+/// # Arguments
+///
+/// - `area`: Terminal rectangle available for this layout or component.
 pub(super) fn inset(area: Rect) -> Rect {
     Rect::new(
         area.x.saturating_add(1),
@@ -33,6 +48,11 @@ pub(super) fn inset(area: Rect) -> Rect {
 }
 
 /// Reserve header/table space and show details only when enough rows remain.
+///
+/// # Arguments
+///
+/// - `area`: Terminal rectangle available for this layout or component.
+/// - `detail_rows`: Preferred number of terminal rows reserved for the detail panel.
 pub(super) fn calculate(area: Rect, detail_rows: u16) -> Layout {
     let header_height = area.height.min(2);
     let remaining = area.height.saturating_sub(header_height);
@@ -87,6 +107,12 @@ pub(super) fn calculate(area: Rect, detail_rows: u16) -> Layout {
 }
 
 /// Test membership using inclusive left/top and exclusive right/bottom boundaries.
+///
+/// # Arguments
+///
+/// - `area`: Terminal rectangle available for this layout or component.
+/// - `x`: Zero-based terminal column of the pointer.
+/// - `y`: Zero-based terminal row of the pointer.
 pub(super) fn contains(area: Rect, x: u16, y: u16) -> bool {
     x >= area.x && x < area.right() && y >= area.y && y < area.bottom()
 }

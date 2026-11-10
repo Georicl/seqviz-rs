@@ -6,6 +6,10 @@ use ratatui::layout::Rect;
 
 impl SequenceView {
     /// Dispatch a key to the active prompt, information page or sequence browsing controls.
+    ///
+    /// # Arguments
+    ///
+    /// - `key`: Keyboard event received from the terminal or the application shell.
     pub(crate) fn key(&mut self, key: KeyEvent) {
         self.redraw = true;
         if self.input.is_some() {
@@ -133,6 +137,10 @@ impl SequenceView {
     }
 
     /// Edit or submit the active prompt, translating user positions from one-based to zero-based.
+    ///
+    /// # Arguments
+    ///
+    /// - `key`: Keyboard event received from the terminal or the application shell.
     pub(crate) fn input_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.input = None,
@@ -180,6 +188,10 @@ impl SequenceView {
     }
 
     /// Move between records or move the sequence cursor by a signed number of displayed rows.
+    ///
+    /// # Arguments
+    ///
+    /// - `delta`: Signed number of record-list rows or displayed sequence rows to move.
     pub(crate) fn move_vertical(&mut self, delta: i64) {
         if self.focus == Focus::Records {
             self.choose_record(self.tab().record.saturating_add_signed(delta));
@@ -189,6 +201,10 @@ impl SequenceView {
     }
 
     /// Move the zero-based cursor, extend a selection and scroll only when the cursor leaves the viewport.
+    ///
+    /// # Arguments
+    ///
+    /// - `delta`: Signed number of sequence symbols by which to move the cursor.
     pub(crate) fn move_cursor(&mut self, delta: i64) {
         let width = self.hits.bases_per_line.max(1) as u64;
         let count = self.count() as u64;
@@ -213,6 +229,10 @@ impl SequenceView {
     }
 
     /// Page the focused pane by its visible record count or sequence capacity.
+    ///
+    /// # Arguments
+    ///
+    /// - `delta`: Signed number of visible pages to move in the focused pane.
     pub(crate) fn scroll(&mut self, delta: i64) {
         if self.focus == Focus::Records {
             self.choose_record(
@@ -260,6 +280,11 @@ impl SequenceView {
     }
 
     /// Map a pointer through the target viewport using the indexed length of the current record.
+    ///
+    /// # Arguments
+    ///
+    /// - `x`: Zero-based terminal column of the pointer.
+    /// - `y`: Zero-based terminal row of the pointer.
     pub(crate) fn sequence_position(&self, x: u16, y: u16) -> Option<u64> {
         let record = self.tab().snapshot.as_ref()?.record.as_ref()?;
         self.hits
@@ -267,11 +292,21 @@ impl SequenceView {
     }
 
     /// Translate a pointer into a row and column of the reflowed information text.
+    ///
+    /// # Arguments
+    ///
+    /// - `x`: Zero-based terminal column of the pointer.
+    /// - `y`: Zero-based terminal row of the pointer.
     pub(crate) fn info_position(&self, x: u16, y: u16) -> (usize, usize) {
         self.info.position(self.hits.info, x, y)
     }
 
     /// Handle pane focus, record selection, sequence/text dragging and wheel scrolling.
+    ///
+    /// # Arguments
+    ///
+    /// - `mouse`: Pointer event received from the terminal, including its position and button or
+    ///   scroll action.
     pub(crate) fn mouse(&mut self, mouse: MouseEvent) {
         self.redraw = true;
         if self.hits.too_small {
@@ -413,6 +448,13 @@ impl SequenceView {
 }
 
 /// Test a terminal point against a rectangle with exclusive right and bottom edges.
+///
+/// # Arguments
+///
+/// - `rect`: Terminal rectangle whose left and top edges are inclusive and whose right and bottom
+///   edges are exclusive.
+/// - `x`: Zero-based terminal column of the pointer.
+/// - `y`: Zero-based terminal row of the pointer.
 fn contains(rect: Rect, x: u16, y: u16) -> bool {
     x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()
 }

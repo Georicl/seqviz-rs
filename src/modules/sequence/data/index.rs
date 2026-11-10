@@ -18,11 +18,24 @@ use std::{
 };
 
 /// Wrap a SQLite error in the I/O error type exposed by the data layer.
+///
+/// # Arguments
+///
+/// - `error`: SQLite error to expose through the data layer as an I/O error.
 fn sql(error: rusqlite::Error) -> io::Error {
     io::Error::other(error)
 }
 
 /// SQLite-backed record and span storage with incremental metadata and statistics.
+///
+/// # Fields
+///
+/// - `db`: Connection owning the record index and its scan-step transactions.
+/// - `format`: Detected format used to select metadata and aggregate behavior.
+/// - `force_protein`: Whether the input extension requires protein classification.
+/// - `progress`: Most recent in-memory record counts, scan position and error state.
+/// - `current`: Aggregate counters for the partial record, if one is open.
+/// - `span`: Current coalesced span waiting to be written to SQLite.
 pub(super) struct RecordIndex {
     /// Connection owning the record index and its scan-step transactions.
     pub(super) db: Connection,
@@ -38,6 +51,22 @@ pub(super) struct RecordIndex {
     span: Option<PendingSpan>,
 }
 /// In-memory aggregates for the record currently being scanned.
+///
+/// # Fields
+///
+/// - `id`: Zero-based ID assigned when the record begins.
+/// - `length`: Sequence symbols decoded so far.
+/// - `qlen`: Quality scores decoded so far.
+/// - `gc`: Count of G and C symbols, case-insensitive.
+/// - `sample`: At most the first 1,000 sequence symbols for alphabet detection.
+/// - `has_sequence`: Whether the record supplies sequence rather than a missing-value marker.
+/// - `has_quality`: Whether any quality scores have been observed.
+/// - `qmin`: Smallest numeric Phred score observed, initially 93.
+/// - `qmax`: Largest numeric Phred score observed.
+/// - `qsum`: Sum of numeric Phred scores.
+/// - `q30`: Number of scores at or above Phred 30.
+/// - `qbins`: Phred-score sums across 64 positional bins.
+/// - `qcounts`: Number of quality scores contributing to each positional bin.
 struct Current {
     /// Zero-based ID assigned when the record begins.
     id: u64,
@@ -68,6 +97,16 @@ struct Current {
 }
 
 /// Source span awaiting persistence, with independent decoded and raw byte coordinates.
+///
+/// # Fields
+///
+/// - `record`: Zero-based ID of the owning record.
+/// - `kind`: Sequence or quality coordinate stream.
+/// - `start`: Zero-based decoded coordinate of this span.
+/// - `len`: Number of decoded symbols represented by the span.
+/// - `offset`: Logical source-byte offset of the span.
+/// - `raw_len`: Number of source bytes to read, including text whitespace.
+/// - `encoding`: Decoder required to recover symbols from the raw span.
 struct PendingSpan {
     /// Zero-based ID of the owning record.
     record: u64,
@@ -86,6 +125,14 @@ struct PendingSpan {
 }
 
 /// Persisted source interval and decoding metadata for one sequence or quality span.
+///
+/// # Fields
+///
+/// - `start`: Zero-based decoded coordinate of the span.
+/// - `len`: Number of decoded symbols represented by the span.
+/// - `offset`: Logical source-byte offset used by range reads.
+/// - `raw_len`: Number of source bytes to read before decoding.
+/// - `encoding`: Decoder needed for this source interval.
 pub(super) struct StoredSpan {
     /// Zero-based decoded coordinate of the span.
     pub start: u64,
@@ -102,6 +149,14 @@ pub(super) struct StoredSpan {
 impl RecordIndex {
     /// Open the record database and return its safe resume offset and BAM-header status.
     /// Incomplete records are removed before resuming; completed records remain reusable.
+    ///
+    /// # Arguments
+    ///
+    /// - `directory`: Directory in which the cache files are stored.
+    /// - `key`: Source identity and schema fingerprint used to select the record database.
+    /// - `format`: Sequence or alignment format that determines how input bytes are parsed.
+    /// - `force_protein`: Whether to classify the input sequences as protein regardless of sampled
+    ///   letters.
     pub fn open(
         directory: &Path,
         key: u64,
@@ -205,6 +260,11 @@ impl RecordIndex {
 
     /// Commits a bounded parser step, including partial metadata and resume state.
     /// Invalid input stops scanning but retains all successfully indexed spans.
+    ///
+    /// # Arguments
+    ///
+    /// - `outcome`: Parser result for the current step, with `true` indicating end of input.
+    /// - `position`: Logical source-byte offset reached by the parser at the end of this step.
     pub fn finish_step(&mut self, outcome: io::Result<bool>, position: u64) -> io::Result<bool> {
         let result = (|| {
             let stopped = match outcome {
@@ -243,6 +303,14 @@ impl RecordIndex {
 
     /// Visits intersecting spans one at a time, keeping range reads bounded even
     /// for highly fragmented indexes. The caller handles source I/O and decoding.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Zero-based ID of the indexed sequence record.
+    /// - `start`: Zero-based sequence coordinate at which the requested interval begins.
+    /// - `len`: Maximum number of sequence or quality symbols to read from `start`.
+    /// - `kind`: Whether the source span contains sequence symbols or quality scores.
+    /// - `visit`: Callback invoked for each stored span overlapping the requested interval.
     pub fn visit_spans(
         &self,
         id: u64,
@@ -276,6 +344,11 @@ impl RecordIndex {
         Ok(())
     }
     /// Read ordered record summaries from an inclusive zero-based ID with a bounded result size.
+    ///
+    /// # Arguments
+    ///
+    /// - `offset`: Inclusive zero-based record ID at which the result page begins.
+    /// - `limit`: Maximum number of record summaries to return.
     pub fn records(&self, offset: u64, limit: usize) -> io::Result<Vec<RecordSummary>> {
         let mut query = self
             .db
@@ -296,6 +369,10 @@ impl RecordIndex {
     }
 
     /// Load record metadata and ordered fields, deriving completed quality and GC statistics.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Zero-based ID of the indexed sequence record.
     pub fn record(&self, id: u64) -> io::Result<Option<RecordMeta>> {
         let mut value = self.db.query_row("SELECT id,name,header,plus,length,qlen,complete,seqtype,gc,has_seq,has_qual,qmin,qmax,qsum,q30,overview FROM records WHERE id=?", [id], |r| {
             let length: u64 = r.get(4)?;
@@ -329,6 +406,11 @@ impl RecordIndex {
     }
 
     /// Search indexed names from `after` inclusively; the caller controls wraparound.
+    ///
+    /// # Arguments
+    ///
+    /// - `query`: Literal substring to find in indexed record names.
+    /// - `after`: Inclusive zero-based record ID at which the name search begins.
     pub fn find_name(&self, query: &str, after: u64) -> io::Result<Option<u64>> {
         let query = query.to_ascii_lowercase();
         self.db
@@ -342,6 +424,12 @@ impl RecordIndex {
     }
 
     /// Run a name search with a temporary SQLite progress hook and report cancellation as interrupted.
+    ///
+    /// # Arguments
+    ///
+    /// - `query`: Literal substring to find in indexed record names.
+    /// - `after`: Inclusive zero-based record ID at which the name search begins.
+    /// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
     pub fn find_name_cancellable(
         &self,
         query: &str,
@@ -364,6 +452,10 @@ impl RecordIndex {
     }
 
     /// Run aggregate queries with a temporary SQLite progress hook, removing it before returning.
+    ///
+    /// # Arguments
+    ///
+    /// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
     pub fn stats_cancellable(&self, cancel: Arc<AtomicBool>) -> io::Result<Stats> {
         let signal = cancel.clone();
         self.db
@@ -416,6 +508,11 @@ impl RecordIndex {
     }
 
     /// Insert or replace one persisted scan-state value.
+    ///
+    /// # Arguments
+    ///
+    /// - `key`: Persistent scan-state key to insert or replace.
+    /// - `value`: Text representation of the checkpoint value to store.
     fn set_meta(&self, key: &str, value: &str) -> io::Result<()> {
         self.db
             .execute(
@@ -427,6 +524,11 @@ impl RecordIndex {
     }
 
     /// Persist an input error and update the in-memory error count and latest message.
+    ///
+    /// # Arguments
+    ///
+    /// - `offset`: Zero-based byte offset in the logical, decompressed source stream.
+    /// - `message`: Diagnostic message recorded at the given source offset.
     fn log_error(&mut self, offset: u64, message: &str) -> io::Result<()> {
         self.db
             .execute("INSERT INTO errors VALUES(?,?)", params![offset, message])
@@ -437,6 +539,12 @@ impl RecordIndex {
     }
 
     /// Assign the next zero-based record ID and initialize its incremental statistics.
+    ///
+    /// # Arguments
+    ///
+    /// - `header`: Full record defline or read name, without the leading FASTA or FASTQ marker.
+    /// - `has_sequence`: Whether this record contains a sequence, independently of its current
+    ///   indexed length.
     fn begin_record(&mut self, header: String, has_sequence: bool) -> io::Result<()> {
         let name = header.split_whitespace().next().unwrap_or("").to_owned();
         if name.is_empty() {
@@ -475,6 +583,11 @@ impl RecordIndex {
     }
 
     /// Replace a record's metadata fields while preserving their supplied order.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Zero-based ID of the indexed sequence record.
+    /// - `fields`: Ordered name/value metadata fields for the current record.
     fn store_fields(&self, id: u64, fields: &[(String, String)]) -> io::Result<()> {
         self.db
             .execute("DELETE FROM attrs WHERE record=?", [id])
@@ -492,6 +605,10 @@ impl RecordIndex {
     }
 
     /// Persist current lengths, alphabet classification and quality aggregates with the completion flag.
+    ///
+    /// # Arguments
+    ///
+    /// - `complete`: Whether the current record has been fully parsed.
     fn save_current(&self, complete: bool) -> io::Result<()> {
         if let Some(c) = &self.current {
             let seqtype = if self.force_protein {
@@ -520,6 +637,10 @@ impl RecordIndex {
     }
 
     /// Flush spans, mark the current record complete and save the next safe resume offset.
+    ///
+    /// # Arguments
+    ///
+    /// - `next_offset`: Logical source-byte boundary from which a later scan can safely resume.
     fn end_record(&mut self, next_offset: u64) -> io::Result<()> {
         self.flush_span()?;
         self.save_current(true)?;
@@ -547,6 +668,15 @@ impl RecordIndex {
 
     /// Accumulate decoded lengths and statistics while coalescing text spans up to one chunk.
     /// Binary spans remain separate so packed BAM bases retain their decoding boundaries.
+    ///
+    /// # Arguments
+    ///
+    /// - `raw`: Original source bytes before sequence or quality decoding.
+    /// - `offset`: Zero-based byte offset in the logical, decompressed source stream.
+    /// - `kind`: Whether the source span contains sequence symbols or quality scores.
+    /// - `encoding`: Decoder used to turn stored source spans into sequence or quality symbols.
+    /// - `decoded`: Decoded sequence symbols or Phred+33 quality bytes corresponding to the source
+    ///   fragment.
     fn append(
         &mut self,
         raw: &[u8],
@@ -649,10 +779,20 @@ impl RecordSink for RecordIndex {
         })
     }
     /// Assign the next zero-based record ID and initialize its incremental statistics.
+    ///
+    /// # Arguments
+    ///
+    /// - `header`: Full record defline or read name, without the leading FASTA or FASTQ marker.
+    /// - `has_sequence`: Whether this record contains a sequence, independently of its current
+    ///   indexed length.
     fn begin_record(&mut self, header: String, has_sequence: bool) -> io::Result<()> {
         self.begin_record(header, has_sequence)
     }
     /// Persist the current FASTQ record's complete separator line.
+    ///
+    /// # Arguments
+    ///
+    /// - `plus`: Complete FASTQ separator line, including its leading `+`.
     fn set_plus(&mut self, plus: String) -> io::Result<()> {
         let id = self
             .current
@@ -665,6 +805,10 @@ impl RecordSink for RecordIndex {
         Ok(())
     }
     /// Replace the current record's ordered metadata fields.
+    ///
+    /// # Arguments
+    ///
+    /// - `fields`: Ordered name/value metadata fields for the current record.
     fn set_fields(&mut self, fields: &[(String, String)]) -> io::Result<()> {
         let id = self
             .current
@@ -681,6 +825,15 @@ impl RecordSink for RecordIndex {
     }
     /// Accumulate decoded lengths and statistics while coalescing text spans up to one chunk.
     /// Binary spans remain separate so packed BAM bases retain their decoding boundaries.
+    ///
+    /// # Arguments
+    ///
+    /// - `raw`: Original source bytes before sequence or quality decoding.
+    /// - `offset`: Zero-based byte offset in the logical, decompressed source stream.
+    /// - `kind`: Whether the source span contains sequence symbols or quality scores.
+    /// - `encoding`: Decoder used to turn stored source spans into sequence or quality symbols.
+    /// - `decoded`: Decoded sequence symbols or Phred+33 quality bytes corresponding to the source
+    ///   fragment.
     fn append(
         &mut self,
         raw: &[u8],
@@ -696,6 +849,10 @@ impl RecordSink for RecordIndex {
         self.flush_span()
     }
     /// Flush spans, mark the current record complete and save the next safe resume offset.
+    ///
+    /// # Arguments
+    ///
+    /// - `next_offset`: Logical source-byte boundary from which a later scan can safely resume.
     fn end_record(&mut self, next_offset: u64) -> io::Result<()> {
         self.end_record(next_offset)
     }
@@ -704,10 +861,19 @@ impl RecordSink for RecordIndex {
         self.discard_current()
     }
     /// Persist an input error and update the in-memory error count and latest message.
+    ///
+    /// # Arguments
+    ///
+    /// - `offset`: Zero-based byte offset in the logical, decompressed source stream.
+    /// - `message`: Diagnostic message recorded at the given source offset.
     fn log_error(&mut self, offset: u64, message: &str) -> io::Result<()> {
         self.log_error(offset, message)
     }
     /// Persist the logical-byte boundary for a safe restart.
+    ///
+    /// # Arguments
+    ///
+    /// - `offset`: Zero-based byte offset in the logical, decompressed source stream.
     fn set_resume(&mut self, offset: u64) -> io::Result<()> {
         self.set_meta("resume", &offset.to_string())
     }
@@ -717,6 +883,12 @@ impl RecordSink for RecordIndex {
         Ok(())
     }
     /// Persist a BAM header reference with its numeric ID, name and length.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Zero-based reference ID from the BAM header.
+    /// - `name`: Reference sequence name from the BAM header.
+    /// - `length`: Reference sequence length from the BAM header.
     fn add_reference(&mut self, id: i32, name: &str, length: u64) -> io::Result<()> {
         self.db
             .execute("INSERT INTO refs VALUES(?,?,?)", params![id, name, length])
@@ -724,6 +896,10 @@ impl RecordSink for RecordIndex {
         Ok(())
     }
     /// Resolve a BAM reference ID, returning `*` for `-1` and rejecting unknown IDs.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: BAM reference ID to resolve, with `-1` denoting a missing reference.
     fn reference_name(&self, id: i32) -> io::Result<String> {
         if id == -1 {
             return Ok("*".into());
@@ -735,6 +911,10 @@ impl RecordSink for RecordIndex {
             .ok_or_else(|| invalid("BAM references an unknown reference sequence"))
     }
     /// Persist BAM-header completion and the first alignment's logical-byte offset.
+    ///
+    /// # Arguments
+    ///
+    /// - `offset`: Logical source-byte offset of the first BAM alignment after the header.
     fn finish_header(&mut self, offset: u64) -> io::Result<()> {
         self.set_meta("bam_header", &offset.to_string())?;
         self.set_resume(offset)
@@ -743,6 +923,10 @@ impl RecordSink for RecordIndex {
 
 // These mappings are the persisted v1 schema; enum layout is not part of that schema.
 /// Encode the sequence or quality channel using the stable SQLite schema values.
+///
+/// # Arguments
+///
+/// - `kind`: Whether the source span contains sequence symbols or quality scores.
 fn kind_code(kind: SpanKind) -> i64 {
     match kind {
         SpanKind::Sequence => 0,
@@ -750,6 +934,10 @@ fn kind_code(kind: SpanKind) -> i64 {
     }
 }
 /// Encode a span decoder using the stable SQLite schema values.
+///
+/// # Arguments
+///
+/// - `encoding`: Decoder used to turn stored source spans into sequence or quality symbols.
 fn encoding_code(encoding: SpanEncoding) -> i64 {
     match encoding {
         SpanEncoding::Text => 0,
@@ -758,6 +946,10 @@ fn encoding_code(encoding: SpanEncoding) -> i64 {
     }
 }
 /// Decode a stored span encoding, rejecting unrecognized schema values.
+///
+/// # Arguments
+///
+/// - `code`: Persisted schema code to decode into its typed representation.
 fn encoding_from_code(code: i64) -> io::Result<SpanEncoding> {
     match code {
         0 => Ok(SpanEncoding::Text),

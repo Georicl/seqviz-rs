@@ -16,6 +16,10 @@ use std::{
 use seqviz::data::{Dataset, Format, RecordMeta, SeqType};
 
 /// Resolve a checked-in alignment fixture relative to the package root.
+///
+/// # Arguments
+///
+/// - `name`: File name of a checked-in alignment fixture.
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("test")
@@ -23,6 +27,12 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 /// Index a fixture with bounded steps and assert error-free completion.
+///
+/// # Arguments
+///
+/// - `path`: Path of the input file to open or display.
+/// - `cache`: Directory for reusable record indexes and source checkpoints.
+/// - `budget`: Maximum number of logical source bytes to consume in this scan step.
 fn scan(path: &Path, cache: &Path, budget: usize) -> Dataset {
     let mut dataset = Dataset::open(path, cache).unwrap();
     for _ in 0..20_000 {
@@ -42,6 +52,11 @@ fn scan(path: &Path, cache: &Path, budget: usize) -> Dataset {
 }
 
 /// Find a named alignment metadata field, failing with the record context if absent.
+///
+/// # Arguments
+///
+/// - `record`: Parsed alignment metadata whose named field is inspected.
+/// - `key`: Alignment field name to retrieve.
 fn field<'a>(record: &'a RecordMeta, key: &str) -> &'a str {
     record
         .fields
@@ -52,6 +67,11 @@ fn field<'a>(record: &'a RecordMeta, key: &str) -> &'a str {
 }
 
 /// Compare floating-point statistics within an absolute tolerance of 1e-10.
+///
+/// # Arguments
+///
+/// - `left`: First floating-point value to compare.
+/// - `right`: Second floating-point value to compare.
 fn close(left: f64, right: f64) {
     assert!((left - right).abs() < 1e-10, "{left} != {right}");
 }
@@ -252,16 +272,30 @@ fn bam_optional_fields_cover_scalar_integer_float_string_hex_and_numeric_arrays(
 }
 
 /// Generate a repeatable ACGTN sequence of the requested byte length.
+///
+/// # Arguments
+///
+/// - `length`: Number of sequence bases and corresponding quality characters to generate.
 fn generated_sequence(length: usize) -> Vec<u8> {
     b"ACGTN".iter().copied().cycle().take(length).collect()
 }
 
 /// Cycle through all printable Phred+33 quality characters for a fixture.
+///
+/// # Arguments
+///
+/// - `length`: Number of sequence bases and corresponding quality characters to generate.
 fn generated_quality(length: usize) -> Vec<u8> {
     (0..length).map(|i| 33 + (i % 94) as u8).collect()
 }
 
 /// Build a single reverse-strand SAM alignment with deterministic sequence and qualities.
+///
+/// # Arguments
+///
+/// - `name`: Read name written to the SAM QNAME field.
+/// - `length`: Number of sequence bases and corresponding quality characters to generate.
+/// - `cigar`: SAM CIGAR string, or `*` when no alignment operations are supplied.
 fn generated_sam(name: &str, length: usize, cigar: &str) -> String {
     format!(
         "@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:chr1\tLN:1000000\n{name}\t16\tchr1\t31\t60\t{cigar}\t*\t0\t0\t{}\t{}\n",

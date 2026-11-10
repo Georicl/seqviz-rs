@@ -10,6 +10,14 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 /// Draw one input line and position the cursor using Unicode display width.
+///
+/// # Arguments
+///
+/// - `frame`: Terminal frame into which the current content is drawn.
+/// - `area`: Terminal rectangle available for this layout or component.
+/// - `label`: Prompt label rendered before the editable text.
+/// - `text`: Current contents of the editable input prompt.
+/// - `theme`: Shared application colours for text, borders, focus and selection.
 pub fn draw(frame: &mut Frame, area: Rect, label: &str, text: &str, theme: &Theme) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -25,6 +33,11 @@ pub fn draw(frame: &mut Frame, area: Rect, label: &str, text: &str, theme: &Them
 }
 
 /// Append ordinary characters or remove the last character on Backspace.
+///
+/// # Arguments
+///
+/// - `text`: Editable input buffer to modify for the key event.
+/// - `key`: Keyboard event received from the terminal or the application shell.
 pub fn edit(text: &mut String, key: KeyEvent) {
     match key.code {
         KeyCode::Backspace => {

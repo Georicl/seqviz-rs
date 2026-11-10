@@ -51,11 +51,21 @@ const SCHEMA: u64 = 1;
 const BAM_BASES: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
 /// Construct an invalid-data error for malformed input or a stale index.
+///
+/// # Arguments
+///
+/// - `message`: Diagnostic message stored in the returned invalid-data error.
 pub(super) fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
 /// Active incremental parser, or a terminal state after completion or fatal input failure.
+///
+/// # Variants
+///
+/// - `Text`: Stateful parser for FASTA, FASTQ or SAM.
+/// - `Bam`: Stateful parser for decoded BAM bytes.
+/// - `Done`: Scanning has completed or stopped on a fatal input error.
 enum Scanner {
     /// Stateful parser for FASTA, FASTQ or SAM.
     Text(text::TextScanner),
@@ -66,6 +76,17 @@ enum Scanner {
 }
 
 /// A sequence source with a persistent record index and an independently restorable scan cursor.
+///
+/// # Fields
+///
+/// - `source_path`: Canonical source path used for identity checks.
+/// - `source_identity`: File metadata fingerprint captured when the source opened.
+/// - `reader`: Buffered logical-byte source shared by scanning and interval reads.
+/// - `index`: Persistent records, source spans and scan progress.
+/// - `scanner`: Format-specific parser state for the next bounded scan step.
+/// - `position`: Logical-byte scan cursor restored after interval reads and copying.
+/// - `_cache_lock`: Held for the dataset lifetime to reserve its cache directory.
+/// - `private_cache`: Temporary directory to remove when another handle owns the reusable cache.
 pub struct Dataset {
     /// Canonical source path used for identity checks.
     source_path: PathBuf,
@@ -89,6 +110,16 @@ impl Dataset {
     /// Open the source and reuse its index, resuming incomplete scans at a record boundary.
     /// Canonical path, file identity and schema version select the cache; contending writers
     /// receive a private cache. `.faa` and `.pep` inputs are classified as protein.
+    ///
+    /// # Arguments
+    ///
+    /// - `path`: Path of the input file to open or display.
+    /// - `cache_dir`: Directory for reusable record indexes and source checkpoints.
+    ///
+    /// # Returns
+    ///
+    /// An open dataset with a new or reused record index. Further scanning is driven by `step`.
+    /// Input, format and cache failures are returned as I/O errors.
     pub fn open(path: &Path, cache_dir: &Path) -> io::Result<Self> {
         fs::create_dir_all(cache_dir)?;
         let canonical = fs::canonicalize(path)?;
@@ -158,6 +189,17 @@ impl Dataset {
     }
 
     /// Performs bounded scan work; background workers can preempt between calls.
+    ///
+    /// # Arguments
+    ///
+    /// - `byte_budget`: Logical source-byte budget for one scan step. A zero budget is treated as
+    ///   one byte.
+    ///
+    /// # Returns
+    ///
+    /// The committed scan progress. Fatal parser failures appear in `Progress::error`.
+    /// Recoverable errors update the progress error counters. Source and storage failures can
+    /// return an I/O error.
     pub fn step(&mut self, byte_budget: usize) -> io::Result<Progress> {
         self.check_source()?;
         if matches!(self.scanner, Scanner::Done) {
@@ -187,21 +229,51 @@ impl Dataset {
     }
 
     /// Return at most `limit` summaries with zero-based IDs at or beyond `offset`.
+    ///
+    /// # Arguments
+    ///
+    /// - `offset`: Inclusive zero-based record ID at which the result page begins.
+    /// - `limit`: Maximum number of record summaries to return.
+    ///
+    /// # Returns
+    ///
+    /// Up to `limit` indexed record summaries in source order. Source-identity and database
+    /// failures return an I/O error.
     pub fn records(&self, offset: u64, limit: usize) -> io::Result<Vec<RecordSummary>> {
         self.check_source()?;
         self.index.records(offset, limit)
     }
     /// Read indexed metadata for a zero-based record ID, or `None` if absent.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Zero-based ID of the indexed sequence record.
+    ///
+    /// # Returns
+    ///
+    /// `Some` metadata when the record is currently indexed, or `None` when it is absent from the
+    /// current index. Source-identity and database failures return an I/O error.
     pub fn record(&self, id: u64) -> io::Result<Option<RecordMeta>> {
         self.check_source()?;
         self.index.record(id)
     }
     /// Search indexed names inclusively from `after`; callers decide when to wrap.
+    ///
+    /// # Arguments
+    ///
+    /// - `query`: Literal substring to find in indexed record names.
+    /// - `after`: Inclusive zero-based record ID at which the name search begins.
     pub fn find_name(&self, query: &str, after: u64) -> io::Result<Option<u64>> {
         self.check_source()?;
         self.index.find_name(query, after)
     }
     /// Search names from `after` inclusively, interrupting SQLite when cancellation is set.
+    ///
+    /// # Arguments
+    ///
+    /// - `query`: Literal substring to find in indexed record names.
+    /// - `after`: Inclusive zero-based record ID at which the name search begins.
+    /// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
     pub fn find_name_cancellable(
         &self,
         query: &str,
@@ -219,6 +291,10 @@ impl Dataset {
         Ok(stats)
     }
     /// Compute aggregate statistics with SQLite cancellation and source-identity checks.
+    ///
+    /// # Arguments
+    ///
+    /// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
     pub fn stats_cancellable(&self, cancel: Arc<AtomicBool>) -> io::Result<Stats> {
         self.check_source()?;
         let stats = self.index.stats_cancellable(cancel)?;
@@ -226,6 +302,19 @@ impl Dataset {
         Ok(stats)
     }
     /// Read indexed source spans overlapping this zero-based sequence interval.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Zero-based ID of the indexed sequence record.
+    /// - `start`: Zero-based sequence coordinate at which the requested interval begins.
+    /// - `len`: Maximum number of sequence or quality symbols to read from `start`.
+    ///
+    /// # Returns
+    ///
+    /// The requested start coordinate and the sequence and quality bytes currently available in the
+    /// indexed interval. The vectors can be shorter than `len`, and quality is empty when
+    /// unavailable. Successful calls restore the scan cursor. Source, index and seek failures
+    /// return an I/O error.
     pub fn read_range(&mut self, id: u64, start: u64, len: usize) -> io::Result<SequenceWindow> {
         self.check_source()?;
         let result = (|| {
@@ -245,6 +334,13 @@ impl Dataset {
     }
 
     /// Decode indexed spans for one sequence or quality interval without restoring the scan cursor.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Zero-based ID of the indexed sequence record.
+    /// - `start`: Zero-based sequence coordinate at which the requested interval begins.
+    /// - `len`: Maximum number of sequence or quality symbols to read from `start`.
+    /// - `kind`: Whether the source span contains sequence symbols or quality scores.
     fn range_kind(
         &mut self,
         id: u64,
@@ -283,6 +379,11 @@ impl Dataset {
         Ok(output)
     }
     /// Explicit copying may allocate the complete record; scanning and browsing do not.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Zero-based ID of the indexed sequence record.
+    /// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
     pub fn copy_record(&mut self, id: u64, cancel: &AtomicBool) -> io::Result<String> {
         self.check_source()?;
         let result = self.copy_record_inner(id, cancel).and_then(|value| {
@@ -295,6 +396,11 @@ impl Dataset {
 
     /// Reconstruct a complete FASTA or FASTQ record, checking cancellation between chunks.
     /// FASTA sequence lines wrap at 60 characters; FASTQ preserves its separator text.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Zero-based ID of the indexed sequence record.
+    /// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
     fn copy_record_inner(&mut self, id: u64, cancel: &AtomicBool) -> io::Result<String> {
         if !self.format().can_copy() {
             return Err(io::Error::new(
@@ -386,6 +492,11 @@ impl Drop for Dataset {
 }
 
 /// Recognize supplied decoded bytes without opening input or creating caches.
+///
+/// # Arguments
+///
+/// - `prefix`: Already decoded input-prefix bytes used for format recognition.
+/// - `path`: File name used to recognise an empty input by its extension.
 pub fn probe_format(prefix: &[u8], path: &std::path::Path) -> std::io::Result<Format> {
     classify::detect_format(prefix, path)
 }

@@ -31,6 +31,11 @@ use std::{
 };
 
 /// Pane that receives sequence-navigation keyboard commands.
+///
+/// # Variants
+///
+/// - `Records`: Navigate the list of indexed records.
+/// - `Sequence`: Navigate sequence characters and their selection.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Focus {
     /// Navigate the list of indexed records.
@@ -39,6 +44,13 @@ pub(crate) enum Focus {
     Sequence,
 }
 /// Information-page overlays available within a sequence document.
+///
+/// # Variants
+///
+/// - `Help`: Keyboard controls and interpretation of displayed sequence metrics.
+/// - `File`: Source path, format, compression and index progress.
+/// - `Record`: Current record header, parsed properties and sequence metrics.
+/// - `Statistics`: Dataset-wide metrics requested from the backend.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Page {
     /// Keyboard controls and interpretation of displayed sequence metrics.
@@ -52,6 +64,10 @@ pub(crate) enum Page {
 }
 impl Page {
     /// Cycle through information pages in either direction, wrapping at the ends.
+    ///
+    /// # Arguments
+    ///
+    /// - `backwards`: Whether to navigate in reverse order, wrapping at the beginning.
     pub(crate) fn next(self, backwards: bool) -> Self {
         let pages = [Self::Help, Self::File, Self::Record, Self::Statistics];
         let i = pages.iter().position(|p| *p == self).unwrap();
@@ -59,6 +75,11 @@ impl Page {
     }
 }
 /// Editable search text or one-based position entered in the bottom prompt.
+///
+/// # Variants
+///
+/// - `Search`: Literal record-name query being edited.
+/// - `Position`: One-based sequence position being entered as text.
 pub(crate) enum Input {
     /// Literal record-name query being edited.
     Search(String),
@@ -67,6 +88,19 @@ pub(crate) enum Input {
 }
 
 /// Navigation and cached data retained independently for each document tab.
+///
+/// # Fields
+///
+/// - `path`: Original source path shown in the file-information page.
+/// - `record`: Zero-based selected record ID.
+/// - `start`: Zero-based sequence offset at the top of the target viewport.
+/// - `cursor`: Zero-based sequence coordinate of the keyboard cursor.
+/// - `selection`: Inclusive zero-based sequence endpoints, retaining drag direction.
+/// - `list_start`: Zero-based record ID at the top of the record list.
+/// - `snapshot`: Most recent accepted viewport snapshot for this document.
+/// - `message`: Current operation, error or status message shown in the status bar.
+/// - `last_search`: Last nonempty name query, reused by the next-match command.
+/// - `pending_end`: Whether an End command is waiting for indexing to establish the final position.
 pub(crate) struct SequenceState {
     /// Original source path shown in the file-information page.
     pub(crate) path: PathBuf,
@@ -91,6 +125,11 @@ pub(crate) struct SequenceState {
 }
 
 /// Focus and quality-row preferences carried between sequence tabs.
+///
+/// # Fields
+///
+/// - `focus`: Record or sequence pane selected for navigation.
+/// - `show_quality`: Whether aligned quality rows should remain visible across tab switches.
 pub(crate) struct SharedInteraction {
     /// Record or sequence pane selected for navigation.
     pub(crate) focus: Focus,
@@ -99,6 +138,27 @@ pub(crate) struct SharedInteraction {
 }
 
 /// Sequence document controller that queues shell actions and consumes backend snapshots.
+///
+/// # Fields
+///
+/// - `document`: Per-tab navigation state and its latest accepted data snapshot.
+/// - `file`: Stable tab index used to route requests and replies.
+/// - `enabled`: Whether this view is active and may accept operation results.
+/// - `shared`: Cross-tab focus and quality-row preferences handed off on activation.
+/// - `focus`: Record or sequence pane selected for navigation.
+/// - `page`: Currently open information overlay, if any.
+/// - `input`: Prompt currently capturing typed input, if any.
+/// - `config`: Sequence display settings, including quality visibility and residue colours.
+/// - `theme`: Shared application colours for focus, borders and selection.
+/// - `hits`: Prepared rendering geometry, also used for pointer hit testing.
+/// - `token`: Viewport generation used to reject snapshots superseded by navigation or resizing.
+/// - `dirty`: Whether the current viewport needs a new backend request.
+/// - `redraw`: Whether visible state needs another terminal frame.
+/// - `operation_ids`: Application-wide ID source shared by operations across document tabs.
+/// - `pending_operation`: Active search/copy identity, independent of the viewport token.
+/// - `drag`: Last pointer position while sequence selection is being dragged.
+/// - `info`: Reflowed information-page text with independent scrolling and selection.
+/// - `actions`: Requests and clipboard work queued for the shell to drain.
 pub(crate) struct SequenceView {
     /// Per-tab navigation state and its latest accepted data snapshot.
     pub(crate) document: SequenceState,
@@ -138,6 +198,11 @@ pub(crate) struct SequenceView {
     actions: Vec<Action>,
 }
 /// User operation whose result must match the pending operation identity.
+///
+/// # Variants
+///
+/// - `Search`: Record-name search that selects its resulting record.
+/// - `Copy`: Sequence or information-text copy delivered through the clipboard service.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OperationKind {
     /// Record-name search that selects its resulting record.
@@ -147,6 +212,13 @@ pub(crate) enum OperationKind {
 }
 
 /// One active user operation with a cancellation flag distinct from viewport generations.
+///
+/// # Fields
+///
+/// - `id`: Globally allocated identity echoed by backend and clipboard results.
+/// - `file`: Stable tab index used to route requests and replies.
+/// - `kind`: Expected operation result type.
+/// - `cancel`: Operation-owned flag that remains set once the operation is cancelled.
 pub(crate) struct PendingOperation {
     /// Globally allocated identity echoed by backend and clipboard results.
     pub(crate) id: u64,
@@ -160,6 +232,16 @@ pub(crate) struct PendingOperation {
 
 impl SequenceView {
     /// Create one document view with shared operation IDs and cross-tab interaction preferences.
+    ///
+    /// # Arguments
+    ///
+    /// - `path`: Path of the input file to open or display.
+    /// - `file`: Zero-based tab ID used to route requests and results.
+    /// - `config`: Sequence display and colour settings used by this page.
+    /// - `theme`: Shared application colours for text, borders, focus and selection.
+    /// - `operation_ids`: Shared counter that allocates distinct operation IDs across document
+    ///   pages.
+    /// - `shared`: Shared focus and quality-row preferences used by sequence tabs.
     pub(crate) fn new(
         path: PathBuf,
         file: usize,
@@ -209,11 +291,19 @@ impl SequenceView {
         &mut self.document
     }
     /// Queue a sequence request for the application shell to forward to the worker.
+    ///
+    /// # Arguments
+    ///
+    /// - `request`: Request to dispatch to or handle in the owning backend.
     fn send(&mut self, request: Request) {
         self.actions
             .push(Action::Request(ModuleRequest::sequence(request)));
     }
     /// Queue an update to the shared background-cancellation flag.
+    ///
+    /// # Arguments
+    ///
+    /// - `cancelled`: Whether background work should observe cancellation.
     fn set_background_cancelled(&mut self, cancelled: bool) {
         self.actions.push(Action::BackgroundCancelled(cancelled));
     }
@@ -244,6 +334,10 @@ impl SequenceView {
         self.dirty = false;
     }
     /// Cancel the active operation, select a record and reset sequence navigation while keeping it visible.
+    ///
+    /// # Arguments
+    ///
+    /// - `record`: Zero-based ID of the sequence record to select or read.
     pub(crate) fn choose_record(&mut self, record: u64) {
         self.cancel_operation();
         self.redraw = true;
@@ -268,6 +362,10 @@ impl SequenceView {
         self.dirty = true;
     }
     /// Open an information page, reset its scroll/selection and request statistics when needed.
+    ///
+    /// # Arguments
+    ///
+    /// - `page`: Information page to display.
     pub(crate) fn open_page(&mut self, page: Page) {
         self.redraw = true;
         self.page = Some(page);
@@ -324,6 +422,12 @@ impl SequenceView {
         }
     }
     /// Accept only the enabled view's matching file, ID, kind and uncancelled operation.
+    ///
+    /// # Arguments
+    ///
+    /// - `file`: Zero-based tab ID used to route requests and results.
+    /// - `id`: Operation ID echoed by the result being checked.
+    /// - `kind`: User operation kind, distinguishing a name search from a copy.
     pub(crate) fn matches_operation(&self, file: usize, id: u64, kind: OperationKind) -> bool {
         self.enabled
             && file == self.file
@@ -335,6 +439,10 @@ impl SequenceView {
             })
     }
     /// Apply matching viewport generations and operation results, completing deferred end navigation.
+    ///
+    /// # Arguments
+    ///
+    /// - `update`: Backend reply to route or apply to the matching document and request.
     fn apply_update(&mut self, update: Update) {
         self.redraw = true;
         match update {
@@ -396,6 +504,10 @@ impl SequenceView {
     }
 
     /// Queue clipboard delivery with the pending operation's identity and cancellation flag.
+    ///
+    /// # Arguments
+    ///
+    /// - `text`: Prepared UTF-8 text to submit for the current copy operation.
     pub(crate) fn submit_clipboard(&mut self, text: String) {
         if let Some(op) = self.pending_operation.as_ref() {
             self.actions.push(Action::Clipboard {
@@ -408,6 +520,10 @@ impl SequenceView {
         }
     }
     /// Cancel the previous operation and allocate a new global ID with its own cancellation flag.
+    ///
+    /// # Arguments
+    ///
+    /// - `kind`: User operation kind, distinguishing a name search from a copy.
     pub(crate) fn begin_operation(&mut self, kind: OperationKind) -> (u64, Arc<AtomicBool>) {
         self.cancel_operation();
         let id = self.operation_ids.fetch_add(1, Ordering::Relaxed) + 1;
@@ -421,6 +537,10 @@ impl SequenceView {
         (id, cancel)
     }
     /// Recalculate geometry, mark capacity changes for refresh and reflow visible information text.
+    ///
+    /// # Arguments
+    ///
+    /// - `area`: Terminal rectangle available for this layout or component.
     pub(crate) fn prepare_frame(&mut self, area: Rect) {
         let meta = self
             .document
@@ -461,18 +581,35 @@ impl Drop for SequenceView {
 
 impl DocumentView for SequenceView {
     /// Prepare sequence geometry for the document body assigned by the application.
+    ///
+    /// # Arguments
+    ///
+    /// - `area`: Terminal rectangle available for this layout or component.
     fn prepare(&mut self, area: Rect) {
         self.prepare_frame(area);
     }
     /// Render the sequence document from its prepared geometry and cached snapshot.
+    ///
+    /// # Arguments
+    ///
+    /// - `frame`: Terminal frame into which the current content is drawn.
     fn draw(&self, frame: &mut Frame) {
         render::draw(frame, self);
     }
     /// Forward a document key event to sequence-specific interaction handling.
+    ///
+    /// # Arguments
+    ///
+    /// - `event`: Keyboard event received from the terminal or the application shell.
     fn key(&mut self, event: crossterm::event::KeyEvent) {
         self.key(event);
     }
     /// Forward a document pointer event to sequence-specific interaction handling.
+    ///
+    /// # Arguments
+    ///
+    /// - `event`: Pointer event received from the terminal, including its position and button or
+    ///   scroll action.
     fn mouse(&mut self, event: crossterm::event::MouseEvent) {
         self.mouse(event);
     }
@@ -505,6 +642,10 @@ impl DocumentView for SequenceView {
         self.request_view();
     }
     /// Accept sequence-domain updates and discard updates for other document kinds.
+    ///
+    /// # Arguments
+    ///
+    /// - `update`: Backend reply to route or apply to the matching document and request.
     fn update(&mut self, update: ModuleUpdate) {
         if let ModuleUpdate::Sequence(update) = update {
             self.apply_update(update.payload);
@@ -566,10 +707,19 @@ impl DocumentView for SequenceView {
         self.can_copy()
     }
     /// Check whether a clipboard result still belongs to the active copy operation.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Operation ID echoed by the result being checked.
     fn accepts_copy(&self, id: u64) -> bool {
         self.matches_operation(self.file, id, OperationKind::Copy)
     }
     /// Clear a matching copy operation and display its clipboard completion message.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Operation ID echoed by the result being checked.
+    /// - `message`: Clipboard completion or failure message displayed for the matching operation.
     fn copy_finished(&mut self, id: u64, message: String) {
         if self.accepts_copy(id) {
             self.pending_operation = None;

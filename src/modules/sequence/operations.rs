@@ -12,6 +12,16 @@ use std::{
 };
 
 /// Literal record-name search retried as new records become indexed.
+///
+/// # Fields
+///
+/// - `operation_id`: Monotonic operation identity echoed in success or failure updates.
+/// - `file`: Tab index that requested the operation.
+/// - `query`: Literal substring to find in indexed record names.
+/// - `after`: First zero-based record ID included in the search; wrapping waits until scanning
+///   stops.
+/// - `cancel`: Flag owned by this operation; once set, it remains cancelled.
+/// - `tried`: Last scan state searched, avoiding repeat queries when no searchable records changed.
 pub(super) struct SearchJob {
     /// Monotonic operation identity echoed in success or failure updates.
     pub operation_id: u64,
@@ -29,6 +39,14 @@ pub(super) struct SearchJob {
 
 impl SearchJob {
     /// Returns true once a result, failure, or cancellation ends the job.
+    ///
+    /// # Arguments
+    ///
+    /// - `slot`: Open dataset together with its cached statistics and failure state.
+    /// - `stopped`: Whether scanning has completed or failed, so no further indexed data can
+    ///   arrive.
+    /// - `updates`: Channel through which completed work and status messages are sent to the
+    ///   caller.
     pub fn step(&mut self, slot: &mut Slot, stopped: bool, updates: &mpsc::Sender<Update>) -> bool {
         if self.cancel.load(Ordering::Relaxed) {
             return true;
@@ -86,6 +104,14 @@ impl SearchJob {
 }
 
 /// Copy request whose identity and cancellation flag survive viewport refreshes.
+///
+/// # Fields
+///
+/// - `operation_id`: Monotonic operation identity echoed in success or failure updates.
+/// - `file`: Tab index that requested the operation.
+/// - `record`: Zero-based record ID to copy.
+/// - `range`: Zero-based half-open sequence interval, or None for the complete formatted record.
+/// - `cancel`: Flag owned by this operation; once set, it remains cancelled.
 pub(super) struct CopyJob {
     /// Monotonic operation identity echoed in success or failure updates.
     pub operation_id: u64,
@@ -101,6 +127,14 @@ pub(super) struct CopyJob {
 
 impl CopyJob {
     /// Read and publish a ready copy, or return false while required sequence data is still pending.
+    ///
+    /// # Arguments
+    ///
+    /// - `slot`: Open dataset together with its cached statistics and failure state.
+    /// - `stopped`: Whether scanning has completed or failed, so no further indexed data can
+    ///   arrive.
+    /// - `updates`: Channel through which completed work and status messages are sent to the
+    ///   caller.
     pub fn step(&self, slot: &mut Slot, stopped: bool, updates: &mpsc::Sender<Update>) -> bool {
         if self.cancel.load(Ordering::Relaxed) {
             return true;
@@ -129,6 +163,12 @@ impl CopyJob {
     }
 
     /// Return copied text when the record/range is ready, None while scanning can supply it, or an error.
+    ///
+    /// # Arguments
+    ///
+    /// - `slot`: Open dataset together with its cached statistics and failure state.
+    /// - `stopped`: Whether scanning has completed or failed, so no further indexed data can
+    ///   arrive.
     fn read(&self, slot: &mut Slot, stopped: bool) -> io::Result<Option<String>> {
         if !slot.dataset.format().can_copy() {
             return Err(io::Error::new(
@@ -170,6 +210,13 @@ impl CopyJob {
 }
 
 /// Report an operation failure with the identity needed to reject stale replies.
+///
+/// # Arguments
+///
+/// - `updates`: Channel through which completed work and status messages are sent to the caller.
+/// - `operation_id`: Monotonic operation ID used to reject superseded requests and replies.
+/// - `file`: Zero-based tab ID used to route requests and results.
+/// - `text`: Failure message associated with the identified search or copy operation.
 fn failed(updates: &mpsc::Sender<Update>, operation_id: u64, file: usize, text: String) {
     let _ = updates.send(Update::OperationFailed {
         operation_id,
@@ -179,6 +226,14 @@ fn failed(updates: &mpsc::Sender<Update>, operation_id: u64, file: usize, text: 
 }
 
 /// Read the zero-based half-open interval in 64 KiB chunks, checking cancellation between reads.
+///
+/// # Arguments
+///
+/// - `dataset`: Open dataset whose existing index is queried or advanced as needed.
+/// - `record`: Zero-based ID of the sequence record to select or read.
+/// - `start`: Zero-based sequence coordinate at which the requested interval begins.
+/// - `end`: Exclusive zero-based end coordinate of the sequence interval.
+/// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
 fn copy_range(
     dataset: &mut Dataset,
     record: u64,

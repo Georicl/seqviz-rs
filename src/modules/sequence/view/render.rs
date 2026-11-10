@@ -8,6 +8,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 /// Draw the record list, metadata, sequence widget and optional information-page overlay.
+///
+/// # Arguments
+///
+/// - `frame`: Terminal frame into which the current content is drawn.
+/// - `app`: Sequence-page state containing the loaded snapshot, navigation and display settings.
 pub(crate) fn draw(frame: &mut Frame, app: &SequenceView) {
     let body = app.hits.area;
     let left = app.hits.left;
@@ -202,6 +207,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &SequenceView) {
 }
 
 /// Combine operation messages or scan progress with the format-appropriate keyboard hints.
+///
+/// # Arguments
+///
+/// - `app`: Sequence-page state containing the loaded snapshot, navigation and display settings.
 pub(crate) fn status(app: &SequenceView) -> crate::modules::view::Status {
     let status = if !app.tab().message.is_empty() {
         app.tab().message.clone()

@@ -21,11 +21,21 @@ const CHUNK: usize = 64 * 1024;
 const SCHEMA: u64 = 3;
 
 /// Wrap a SQLite error without losing its concrete cause for rollback decisions.
+///
+/// # Arguments
+///
+/// - `error`: SQLite error whose concrete cause is retained inside the resulting I/O error.
 fn sql(error: rusqlite::Error) -> io::Error {
     io::Error::other(error)
 }
 
 /// Committed scan progress and contig ordinals reconstructed from SQLite.
+///
+/// # Fields
+///
+/// - `progress`: Counters and resume offset committed in SQLite.
+/// - `contig_counts`: Indexed count for every known contig.
+/// - `next_contig`: Next display ordinal assigned to a newly discovered contig.
 struct Checkpoint {
     /// Counters and resume offset committed in SQLite.
     progress: Progress,
@@ -37,6 +47,12 @@ struct Checkpoint {
 
 impl Checkpoint {
     /// Load committed metadata and per-contig counts, defaulting to the header boundary.
+    ///
+    /// # Arguments
+    ///
+    /// - `db`: SQLite connection holding the committed VCF index metadata.
+    /// - `header_end`: Logical source-byte offset immediately after the VCF column header.
+    /// - `header_lines`: Number of source lines consumed by the VCF header.
     fn load(db: &Connection, header_end: u64, header_lines: u64) -> io::Result<Self> {
         let meta = |key: &str| -> io::Result<Option<String>> {
             db.query_row("SELECT value FROM meta WHERE key=?1", [key], |row| {
@@ -91,6 +107,25 @@ impl Checkpoint {
 
 /// Index one VCF source incrementally, caching only the selected complete record.
 /// Index offsets address decoded bytes, including for gzip and BGZF sources.
+///
+/// # Fields
+///
+/// - `source_path`: Canonical path whose identity is checked before indexed reads.
+/// - `source_identity`: File metadata fingerprint captured when opening the source.
+/// - `reader`: Buffered decoder reused for scanning and selected-record reads.
+/// - `db`: SQLite summaries, source ranges and committed scan metadata.
+/// - `header`: Shared parsed header with its preserved original text.
+/// - `progress`: Current in-memory scan counters and completion/error state.
+/// - `position`: Decoded read position, including pending bytes; restored after reading a selected
+///   record.
+/// - `resume`: End of the last fully indexed line; the offset persisted for scan recovery.
+/// - `pending`: Decoded bytes of the current line that has not yet been indexed.
+/// - `contig_counts`: Current indexed counts used for per-contig ordinals.
+/// - `next_contig`: Next ordinal for contigs first seen while scanning records.
+/// - `selected`: Only the most recently materialized record, keyed by global source ID.
+/// - `_lock`: Cache lock retained for the entire dataset lifetime.
+/// - `private_cache`: Temporary cache directory to remove when shared-cache locking required
+///   isolation.
 pub(crate) struct Dataset {
     /// Canonical path whose identity is checked before indexed reads.
     source_path: PathBuf,
@@ -124,6 +159,11 @@ pub(crate) struct Dataset {
 
 impl Dataset {
     /// Lock or isolate the source cache, read its header and resume the committed index.
+    ///
+    /// # Arguments
+    ///
+    /// - `path`: Path of the input file to open or display.
+    /// - `cache`: Directory for reusable record indexes and source checkpoints.
     pub(crate) fn open(path: &Path, cache: &Path) -> io::Result<Self> {
         let canonical = fs::canonicalize(path)?;
         let identity = file_identity(&fs::metadata(&canonical)?);
@@ -217,6 +257,11 @@ impl Dataset {
 
     /// Scan a decoded-byte budget (at least one byte) in a SQLite transaction.
     /// Keep valid records before an input error; roll back storage failures to the last checkpoint.
+    ///
+    /// # Arguments
+    ///
+    /// - `byte_budget`: Logical source-byte budget for one scan step. A zero budget is treated as
+    ///   one byte.
     pub(crate) fn step(&mut self, byte_budget: usize) -> io::Result<Progress> {
         self.check_source()?;
         if self.progress.complete || self.progress.error.is_some() {
@@ -263,6 +308,11 @@ impl Dataset {
 
     /// Roll back an unsuccessful transaction and restore the last committed scan boundary.
     /// Discard partial-line and selected-record buffers before returning the original error.
+    ///
+    /// # Arguments
+    ///
+    /// - `error`: Failure from the uncommitted scan step, used to decide whether to stop scanning
+    ///   after rollback.
     fn failed_step(&mut self, error: io::Error) -> io::Result<Progress> {
         let restored = (|| {
             // SQLITE_FULL may already have rolled the transaction back itself.
@@ -293,6 +343,10 @@ impl Dataset {
     }
 
     /// Consume up to the byte budget, retaining a partial line for the next step.
+    ///
+    /// # Arguments
+    ///
+    /// - `budget`: Maximum number of logical source bytes to consume in this scan step.
     fn advance(&mut self, budget: usize) -> io::Result<()> {
         let mut used = 0;
         while used < budget {
@@ -398,6 +452,11 @@ impl Dataset {
     }
 
     /// Count indexed records in all contigs or one contig after verifying source identity.
+    ///
+    /// # Arguments
+    ///
+    /// - `contig`: Optional exact contig filter. `None` selects records across all contigs in
+    ///   source order.
     pub(crate) fn total(&self, contig: Option<&str>) -> io::Result<u64> {
         self.check_source()?;
         Ok(contig.map_or(self.progress.records, |name| {
@@ -425,6 +484,13 @@ impl Dataset {
     }
 
     /// Read at most 512 summaries from a zero-based ordinal in the current contig filter.
+    ///
+    /// # Arguments
+    ///
+    /// - `contig`: Optional exact contig filter. `None` selects records across all contigs in
+    ///   source order.
+    /// - `start`: Zero-based first record ordinal within the current contig filter.
+    /// - `count`: Maximum number of summaries requested, capped at 512.
     pub(crate) fn rows(
         &self,
         contig: Option<&str>,
@@ -472,6 +538,12 @@ impl Dataset {
 
     /// Read or reuse one record by its zero-based filtered ordinal.
     /// Restore the scan reader position so selected-record reads preserve pending scan bytes.
+    ///
+    /// # Arguments
+    ///
+    /// - `contig`: Optional exact contig filter. `None` selects records across all contigs in
+    ///   source order.
+    /// - `ordinal`: Zero-based record ordinal within the selected contig filter.
     pub(crate) fn entry(
         &mut self,
         contig: Option<&str>,
@@ -528,6 +600,11 @@ impl Dataset {
     /// only after indexing completes, so unsorted input cannot produce a false early hit.
     /// If the target lies beyond every indexed position, use the contig's last position.
     /// Return a zero-based ordinal within that contig, not a global source record ID.
+    ///
+    /// # Arguments
+    ///
+    /// - `contig`: Exact contig identifier in which to search.
+    /// - `position`: Target position in the original VCF POS coordinate system.
     pub(crate) fn locate(&self, contig: &str, position: u64) -> io::Result<Option<u64>> {
         self.check_source()?;
         let position = i64::try_from(position)
@@ -567,6 +644,11 @@ impl Dataset {
     }
 
     /// Store one checkpoint value in the current SQLite transaction.
+    ///
+    /// # Arguments
+    ///
+    /// - `key`: Persistent checkpoint key to insert or replace.
+    /// - `value`: Text representation of the checkpoint value to store.
     fn set_meta(&self, key: &str, value: &str) -> io::Result<()> {
         self.db
             .execute(
@@ -602,6 +684,10 @@ impl Drop for Dataset {
 }
 
 /// Limit indexed display text to 64 characters, using an ellipsis for longer values.
+///
+/// # Arguments
+///
+/// - `value`: Display text to truncate to the indexed length limit.
 fn short(value: &str) -> String {
     let mut chars = value.chars();
     let mut out: String = chars.by_ref().take(63).collect();
@@ -616,6 +702,10 @@ fn short(value: &str) -> String {
 }
 
 /// Encode a variant classification using the persisted schema codes.
+///
+/// # Arguments
+///
+/// - `kind`: Variant classification to encode in the persistent index.
 fn kind_code(kind: VariantKind) -> u8 {
     match kind {
         VariantKind::Snv => 0,
@@ -631,6 +721,10 @@ fn kind_code(kind: VariantKind) -> u8 {
 }
 
 /// Decode a stored classification, treating unrecognised codes as Other.
+///
+/// # Arguments
+///
+/// - `code`: Persisted schema code to decode into its typed representation.
 fn decode_kind(code: u8) -> VariantKind {
     match code {
         0 => VariantKind::Snv,
@@ -651,6 +745,10 @@ mod tests {
     use super::*;
 
     /// Read the committed record count directly from the test database.
+    ///
+    /// # Arguments
+    ///
+    /// - `data`: Open dataset used by this query or scan.
     fn indexed_count(data: &Dataset) -> u64 {
         data.db
             .query_row("SELECT COUNT(*) FROM records", [], |row| row.get(0))

@@ -3,6 +3,11 @@ pub use super::sequence::protocol::{Request, Snapshot, Update, ViewRequest};
 pub use crate::core::tasks::protocol::{Envelope, MessageIdentity};
 
 /// Built-in domain selected by probing decoded file content.
+///
+/// # Variants
+///
+/// - `Sequence`: FASTA, FASTQ, SAM or BAM sequence records.
+/// - `Vcf`: VCF variant records and sample details.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
     /// FASTA, FASTQ, SAM or BAM sequence records.
@@ -12,13 +17,31 @@ pub enum ModuleKind {
 }
 
 /// Session lifecycle messages and domain requests sent to the shared worker.
+///
+/// # Variants
+///
+/// - `Open`: Probe the input at the stable file/tab ID.
+///   - `file`: Stable tab ID whose input needs format probing.
+/// - `Close`: Close the tab, releasing its dataset when its last alias is gone.
+///   - `file`: Stable tab ID to close while retaining any live aliases.
+/// - `Quit`: Shut down both domain backends and the session runner.
+/// - `Sequence`: Sequence-domain request with routing identity.
+/// - `Vcf`: VCF-domain request with routing identity.
 pub enum ModuleRequest {
     /// Probe the input at the stable file/tab ID.
+    ///
+    /// # Fields
+    ///
+    /// - `file`: Stable tab ID whose input needs format probing.
     Open {
         /// Stable tab ID whose input needs format probing.
         file: usize,
     },
     /// Close the tab, releasing its dataset when its last alias is gone.
+    ///
+    /// # Fields
+    ///
+    /// - `file`: Stable tab ID to close while retaining any live aliases.
     Close {
         /// Stable tab ID to close while retaining any live aliases.
         file: usize,
@@ -31,8 +54,24 @@ pub enum ModuleRequest {
     Vcf(Envelope<super::vcf::protocol::Request>),
 }
 /// Format-probe results and domain replies returned to document pages.
+///
+/// # Variants
+///
+/// - `Opened`: Detected module for a successfully probed file/tab ID.
+///   - `file`: Stable tab ID whose format was detected.
+///   - `module`: Domain selected from the decoded input prefix.
+/// - `OpenFailed`: Probe failure text for the originating file/tab ID.
+///   - `file`: Stable tab ID whose probe failed.
+///   - `text`: Error text displayed by the loading page.
+/// - `Sequence`: Sequence-domain reply with routing and operation identity.
+/// - `Vcf`: VCF-domain reply with routing and viewport identity.
 pub enum ModuleUpdate {
     /// Detected module for a successfully probed file/tab ID.
+    ///
+    /// # Fields
+    ///
+    /// - `file`: Stable tab ID whose format was detected.
+    /// - `module`: Domain selected from the decoded input prefix.
     Opened {
         /// Stable tab ID whose format was detected.
         file: usize,
@@ -40,6 +79,11 @@ pub enum ModuleUpdate {
         module: ModuleKind,
     },
     /// Probe failure text for the originating file/tab ID.
+    ///
+    /// # Fields
+    ///
+    /// - `file`: Stable tab ID whose probe failed.
+    /// - `text`: Error text displayed by the loading page.
     OpenFailed {
         /// Stable tab ID whose probe failed.
         file: usize,
@@ -54,6 +98,10 @@ pub enum ModuleUpdate {
 
 impl ModuleRequest {
     /// Wrap a VCF request with its document and viewport generation identifiers.
+    ///
+    /// # Arguments
+    ///
+    /// - `request`: Request to dispatch to or handle in the owning backend.
     pub fn vcf(request: super::vcf::protocol::Request) -> Self {
         use super::vcf::protocol::Request as VcfRequest;
         let identity = match &request {
@@ -80,6 +128,10 @@ impl ModuleRequest {
     }
 
     /// Wrap a sequence request with document, viewport or operation identity as applicable.
+    ///
+    /// # Arguments
+    ///
+    /// - `request`: Request to dispatch to or handle in the owning backend.
     pub fn sequence(request: Request) -> Self {
         let identity = match &request {
             Request::View(view) => MessageIdentity {
@@ -114,6 +166,10 @@ impl ModuleRequest {
 
 impl ModuleUpdate {
     /// Wrap a VCF reply with the identifiers required for page routing and stale-result checks.
+    ///
+    /// # Arguments
+    ///
+    /// - `update`: Backend reply to route or apply to the matching document and request.
     pub fn vcf(update: super::vcf::protocol::Update) -> Self {
         use super::vcf::protocol::Update as VcfUpdate;
         let identity = match &update {
@@ -140,6 +196,10 @@ impl ModuleUpdate {
     }
 
     /// Wrap a sequence reply while preserving its viewport or asynchronous operation identity.
+    ///
+    /// # Arguments
+    ///
+    /// - `update`: Backend reply to route or apply to the matching document and request.
     pub fn sequence(update: Update) -> Self {
         let identity = match &update {
             Update::View(snapshot) => MessageIdentity {
@@ -183,6 +243,10 @@ impl ModuleUpdate {
 
 impl super::session::Worker {
     /// Send a domain or lifecycle request through the session's request channel.
+    ///
+    /// # Arguments
+    ///
+    /// - `request`: Request to dispatch to or handle in the owning backend.
     pub fn dispatch(&self, request: ModuleRequest) {
         self.send_module(request);
     }
@@ -192,6 +256,10 @@ impl super::session::Worker {
     }
 
     /// Queue closure of the specified tab and release its backend ownership when appropriate.
+    ///
+    /// # Arguments
+    ///
+    /// - `file`: Zero-based tab ID used to route requests and results.
     pub fn close(&self, file: usize) {
         self.dispatch(ModuleRequest::Close { file });
     }
