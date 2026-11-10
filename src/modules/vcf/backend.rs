@@ -14,6 +14,11 @@ use std::{
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(100);
 
 /// One shared dataset and any nonpersistent failure that stopped its scan.
+///
+/// # Fields
+///
+/// - `dataset`: The source/cache pair shared by tabs with the same canonical owner.
+/// - `failure`: A storage or source failure that stops work for this open dataset.
 struct Slot {
     /// The source/cache pair shared by tabs with the same canonical owner.
     dataset: Dataset,
@@ -22,6 +27,13 @@ struct Slot {
 }
 
 /// An outstanding genomic-position search tied to a tab and request token.
+///
+/// # Fields
+///
+/// - `file`: Tab that initiated the lookup.
+/// - `token`: Lookup generation echoed in success and failure updates.
+/// - `contig`: Exact contig identifier to search.
+/// - `position`: Requested genomic coordinate in VCF POS units.
 struct Locate {
     /// Tab that initiated the lookup.
     file: usize,
@@ -34,6 +46,20 @@ struct Locate {
 }
 
 /// Own shared VCF datasets and advance work for the current viewport.
+///
+/// # Fields
+///
+/// - `files`: Canonical dataset ownership and per-tab open state.
+/// - `cache`: Parent directory for VCF source caches.
+/// - `slots`: Lazily opened datasets stored at their canonical owner indices.
+/// - `paused`: Per-tab background indexing pause flags.
+/// - `view`: Most recent viewport to serve.
+/// - `locate`: Outstanding position lookup, if any.
+/// - `foreground_read`: Whether navigation may scan enough records to fill the requested viewport.
+/// - `dirty`: Whether the current snapshot needs to be published.
+/// - `working`: Whether another scan step can make progress without waiting for a request.
+/// - `last_publish`: Timestamp used to throttle viewport snapshots.
+/// - `updates`: Channel carrying backend responses to the session.
 pub(crate) struct Backend {
     /// Canonical dataset ownership and per-tab open state.
     files: SessionFiles,
@@ -61,6 +87,13 @@ pub(crate) struct Backend {
 
 impl Backend {
     /// Create empty dataset slots and per-tab pause state without opening sources.
+    ///
+    /// # Arguments
+    ///
+    /// - `files`: Input paths and the mapping from alias tabs to shared dataset owners.
+    /// - `cache`: Directory for reusable record indexes and source checkpoints.
+    /// - `updates`: Channel through which completed work and status messages are sent to the
+    ///   caller.
     pub(crate) fn new(files: SessionFiles, cache: PathBuf, updates: mpsc::Sender<Update>) -> Self {
         let count = files.len();
         Self {
@@ -80,6 +113,10 @@ impl Backend {
 
     /// Open the shared dataset on demand and schedule a fresh viewport snapshot.
     /// A changed position may read the required prefix even while background scanning is paused.
+    ///
+    /// # Arguments
+    ///
+    /// - `next`: Replacement viewport specifying the active file, selection and visible range.
     fn set_view(&mut self, next: ViewRequest) {
         if !self.files.is_open(next.file) {
             return;
@@ -125,11 +162,20 @@ impl Backend {
     }
 
     /// Send a status or I/O error message to the specified tab.
+    ///
+    /// # Arguments
+    ///
+    /// - `file`: Zero-based tab ID used to route requests and results.
+    /// - `text`: Status or input/output error message displayed for the specified tab.
     fn message(&self, file: usize, text: String) {
         let _ = self.updates.send(Update::Message { file, text });
     }
 
     /// Apply one navigation, pause or close request; return false on shutdown.
+    ///
+    /// # Arguments
+    ///
+    /// - `request`: Request to dispatch to or handle in the owning backend.
     fn request(&mut self, request: Request) -> bool {
         match request {
             Request::Quit => return false,
@@ -289,6 +335,12 @@ impl Backend {
 }
 
 /// Collect bounded table rows and one raw selected record for the request.
+///
+/// # Arguments
+///
+/// - `slot`: Open VCF dataset and any remembered input/output failure.
+/// - `request`: Viewport identifying the file, selected record and visible region to load.
+/// - `paused`: Whether automatic background indexing is paused for this tab.
 fn snapshot(slot: &mut Slot, request: ViewRequest, paused: bool) -> io::Result<Snapshot> {
     let mut progress = slot.dataset.progress();
     if let Some(error) = &slot.failure {
@@ -327,6 +379,11 @@ impl Driver for Backend {
 
     /// Coalesce consecutive viewport requests while preserving operation ordering.
     /// Flush the latest viewport before each pause, locate, close or quit request.
+    ///
+    /// # Arguments
+    ///
+    /// - `incoming`: Requests in arrival order, with adjacent viewport refreshes eligible for
+    ///   coalescing.
     fn handle_requests(&mut self, incoming: impl Iterator<Item = Request>) -> bool {
         let mut pending = None;
         for request in incoming {

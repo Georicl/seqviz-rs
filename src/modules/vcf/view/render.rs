@@ -13,6 +13,11 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 /// Draw the document panels, then layer an information overlay or contig picker above them.
+///
+/// # Arguments
+///
+/// - `frame`: Terminal frame into which the current content is drawn.
+/// - `view`: Document state containing the current layout, selection and loaded data.
 pub(super) fn draw(frame: &mut Frame, view: &VcfView) {
     if view.layout.area.width == 0 || view.layout.area.height == 0 {
         return;
@@ -40,6 +45,11 @@ pub(super) fn draw(frame: &mut Frame, view: &VcfView) {
 }
 
 /// Show header counts and current locus, or the initial read/error state.
+///
+/// # Arguments
+///
+/// - `frame`: Terminal frame into which the current content is drawn.
+/// - `view`: Document state containing the current layout, selection and loaded data.
 fn draw_header(frame: &mut Frame, view: &VcfView) {
     let lines = if let Some(snapshot) = &view.snapshot {
         vec![
@@ -70,6 +80,10 @@ fn draw_header(frame: &mut Frame, view: &VcfView) {
 }
 
 /// Choose visible table fields and widths, prioritising CHROM, POS, REF and ALT.
+///
+/// # Arguments
+///
+/// - `area`: Terminal rectangle available for this layout or component.
 fn columns(area: Rect) -> Vec<(usize, usize)> {
     let preferred = [8usize, 10, 10, 8, 14, 8, 7, 10];
     let available = usize::from(area.width);
@@ -107,6 +121,11 @@ fn columns(area: Rect) -> Vec<(usize, usize)> {
 }
 
 /// Fit styled graphemes to a cell width with padding or a truncation ellipsis.
+///
+/// # Arguments
+///
+/// - `spans`: Styled text fragments to fit within the available display columns.
+/// - `width`: Available width measured in terminal display columns.
 fn fit(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     if width == 0 {
         return Vec::new();
@@ -162,11 +181,21 @@ fn fit(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
 }
 
 /// Create one owned span with a uniform style for a table field.
+///
+/// # Arguments
+///
+/// - `text`: Table-cell text to render using the supplied style.
+/// - `style`: Terminal text style applied to the field.
 fn plain(text: impl Into<String>, style: Style) -> Vec<Span<'static>> {
     vec![Span::styled(text.into(), style)]
 }
 
 /// Colour literal nucleotide alleles while keeping symbolic and breakend text neutral.
+///
+/// # Arguments
+///
+/// - `text`: Original REF or ALT text, including symbolic or breakend notation.
+/// - `view`: Document state containing the current layout, selection and loaded data.
 fn bases(text: &str, view: &VcfView) -> Vec<Span<'static>> {
     if text
         .bytes()
@@ -187,6 +216,13 @@ fn bases(text: &str, view: &VcfView) -> Vec<Span<'static>> {
 }
 
 /// Fit selected fields to their allocated widths and apply row selection styling.
+///
+/// # Arguments
+///
+/// - `fields`: Styled table fields in source-column order.
+/// - `columns`: Pairs of source-field indices and assigned terminal-column widths.
+/// - `selected`: Whether this table row is the current selection.
+/// - `view`: Document state containing the current layout, selection and loaded data.
 fn table_line(
     fields: Vec<Vec<Span<'static>>>,
     columns: &[(usize, usize)],
@@ -209,6 +245,11 @@ fn table_line(
 }
 
 /// Render matching snapshot rows with adaptive columns or a loading/error message.
+///
+/// # Arguments
+///
+/// - `frame`: Terminal frame into which the current content is drawn.
+/// - `view`: Document state containing the current layout, selection and loaded data.
 fn draw_table(frame: &mut Frame, view: &VcfView) {
     if view.layout.table.height == 0 {
         return;
@@ -308,6 +349,11 @@ fn draw_table(frame: &mut Frame, view: &VcfView) {
 }
 
 /// Style genotype tokens and missing values without changing logical TAB-separated text.
+///
+/// # Arguments
+///
+/// - `line`: Original logical text line to format or wrap.
+/// - `view`: Document state containing the current layout, selection and loaded data.
 fn detail_spans<'a>(line: &'a str, view: &VcfView) -> Vec<Span<'a>> {
     let normal = Style::default().fg(view.theme.foreground);
     if view.detail == Detail::Raw {
@@ -343,6 +389,14 @@ fn detail_spans<'a>(line: &'a str, view: &VcfView) -> Vec<Span<'a>> {
 
 /// Clip styled graphemes to horizontal display columns and expand original TABs.
 /// Return rendered spans, occupied viewport columns and the source display position reached.
+///
+/// # Arguments
+///
+/// - `source`: Styled text fragments in their original logical order.
+/// - `horizontal`: Number of display columns to skip at the left edge.
+/// - `width`: Available width measured in terminal display columns.
+/// - `stops`: Tab-stop display columns shared by headings, values and pointer mapping.
+/// - `style_at`: Callback that adjusts the style for each original character index before clipping.
 fn clip_spans(
     source: Vec<Span<'_>>,
     horizontal: usize,
@@ -387,6 +441,13 @@ fn clip_spans(
 }
 
 /// Apply logical text selection and horizontal clipping, adding an AD bar when space permits.
+///
+/// # Arguments
+///
+/// - `line`: Original logical text line to format or wrap.
+/// - `row`: Zero-based logical detail-row index used for selection highlighting.
+/// - `view`: Document state containing the current layout, selection and loaded data.
+/// - `stops`: Tab-stop display columns shared by headings, values and pointer mapping.
 fn visible_detail(line: &str, row: usize, view: &VcfView, stops: &[usize]) -> Vec<Span<'static>> {
     let selection = view
         .selection
@@ -428,6 +489,11 @@ fn visible_detail(line: &str, row: usize, view: &VcfView, stops: &[usize]) -> Ve
 }
 
 /// Draw detail tabs, aligned headings and the current INFO, sample or raw-record page.
+///
+/// # Arguments
+///
+/// - `frame`: Terminal frame into which the current content is drawn.
+/// - `view`: Document state containing the current layout, selection and loaded data.
 fn draw_details(frame: &mut Frame, view: &VcfView) {
     if view.layout.details.height == 0 {
         return;
@@ -540,6 +606,11 @@ fn draw_details(frame: &mut Frame, view: &VcfView) {
 }
 
 /// Render the searchable contig popup with the current option visible.
+///
+/// # Arguments
+///
+/// - `frame`: Terminal frame into which the current content is drawn.
+/// - `view`: Document state containing the current layout, selection and loaded data.
 fn draw_picker(frame: &mut Frame, view: &VcfView) {
     let (area, list, start) = view.picker_layout();
     if area.width == 0 || area.height == 0 {

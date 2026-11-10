@@ -27,12 +27,21 @@ const POINT_SIZE: u64 = 64;
 const MAGIC: &[u8; 8] = b"SQGZIDX1";
 
 /// All offsets are in the uncompressed byte stream, including for BAM/BGZF.
+///
+/// # Fields
+///
+/// - `inner`: Selected plain-file or compressed-stream implementation.
 pub struct Source {
     /// Selected plain-file or compressed-stream implementation.
     inner: Input,
 }
 
 /// Either direct file I/O or a gzip/BGZF decoder with persistent restart points.
+///
+/// # Variants
+///
+/// - `Plain`: Uncompressed file read directly without a source index.
+/// - `Compressed`: Gzip or BGZF stream with decoder state and restart cache.
 enum Input {
     /// Uncompressed file read directly without a source index.
     Plain(File),
@@ -42,6 +51,16 @@ enum Input {
 
 impl Source {
     /// Detect compression from magic bytes and initialise lazy decoding without scanning the file.
+    ///
+    /// # Arguments
+    ///
+    /// - `path`: Path of the input file to open or display.
+    /// - `cache_dir`: Directory used to store gzip or BGZF restart checkpoints.
+    ///
+    /// # Returns
+    ///
+    /// A seekable source exposing logical, decompressed bytes. Filesystem, compressed-header and
+    /// checkpoint-cache failures return an I/O error.
     pub fn open(path: &Path, cache_dir: &Path) -> io::Result<Self> {
         let mut file = File::open(path)?;
         let mut signature = [0; 2];
@@ -113,6 +132,10 @@ impl Source {
 
 impl Read for Source {
     /// Read logical uncompressed bytes through the selected input backend.
+    ///
+    /// # Arguments
+    ///
+    /// - `buffer`: Destination buffer for bytes read from the logical, decompressed stream.
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         match &mut self.inner {
             Input::Plain(file) => file.read(buffer),
@@ -123,6 +146,10 @@ impl Read for Source {
 
 impl Seek for Source {
     /// Seek in logical uncompressed byte coordinates, delegating restart handling when compressed.
+    ///
+    /// # Arguments
+    ///
+    /// - `position`: Desired seek origin and offset in logical, decompressed byte coordinates.
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
         match &mut self.inner {
             Input::Plain(file) => file.seek(position),
@@ -132,6 +159,10 @@ impl Seek for Source {
 }
 
 /// Create an invalid-data error for malformed compressed input or cache metadata.
+///
+/// # Arguments
+///
+/// - `message`: Diagnostic message stored in the returned invalid-data error.
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
@@ -145,6 +176,10 @@ fn unexpected_eof() -> io::Error {
 // scanning the entire input. ctime also detects equal-size rewrites whose mtime
 // has deliberately been restored.
 /// Read filesystem metadata used to reject stale compressed-source checkpoints.
+///
+/// # Arguments
+///
+/// - `file`: Open source file whose current filesystem identity is queried.
 fn identity(file: &File) -> io::Result<[u64; 7]> {
     let m = file.metadata()?;
     Ok([
@@ -159,12 +194,20 @@ fn identity(file: &File) -> io::Result<[u64; 7]> {
 }
 
 /// Parsed gzip member metadata needed to enforce an optional BGZF block boundary.
+///
+/// # Fields
+///
+/// - `end`: Exclusive compressed-file end offset declared by a BGZF BC field, if present.
 struct MemberHeader {
     /// Exclusive compressed-file end offset declared by a BGZF BC field, if present.
     end: Option<u64>,
 }
 
 /// Parse optional gzip fields incrementally; names/comments are never retained.
+///
+/// # Arguments
+///
+/// - `input`: Reader positioned at the beginning of a compressed gzip or BGZF member.
 fn member_header(input: &mut BufReader<File>) -> io::Result<Option<MemberHeader>> {
     if input.fill_buf()?.is_empty() {
         return Ok(None);
@@ -250,12 +293,21 @@ fn member_header(input: &mut BufReader<File>) -> io::Result<Option<MemberHeader>
 /// Own the pinned z_stream, since zlib retains its address internally. No input
 /// or output pointer survives a call to step(), and the type is intentionally
 /// not Send/Sync: a worker constructs and uses its own source.
+///
+/// # Fields
+///
+/// - `stream`: Stable heap allocation whose address remains valid for zlib's lifetime.
 struct Inflater {
     /// Stable heap allocation whose address remains valid for zlib's lifetime.
     stream: Box<z::z_stream>,
 }
 
 /// Allocate zeroed storage for zlib through the C allocator.
+///
+/// # Arguments
+///
+/// - `count`: Number of zero-initialized objects requested by zlib.
+/// - `size`: Size of each allocated object in bytes.
 unsafe extern "C" fn zalloc(_: z::voidpf, count: z::uInt, size: z::uInt) -> z::voidpf {
     // SAFETY: calloc returns suitably aligned zeroed storage or a null pointer;
     // zlib checks allocation failure and pairs this with zfree below.
@@ -263,12 +315,24 @@ unsafe extern "C" fn zalloc(_: z::voidpf, count: z::uInt, size: z::uInt) -> z::v
 }
 
 /// Release storage previously allocated by the zlib allocation callback.
+///
+/// # Arguments
+///
+/// - `address`: Allocation returned by the zlib allocator, or a null pointer.
 unsafe extern "C" fn zfree(_: z::voidpf, address: z::voidpf) {
     // SAFETY: zlib only passes allocations obtained from zalloc (or null).
     unsafe { libc::free(address) }
 }
 
 /// Progress and restart-boundary information from one raw DEFLATE decode step.
+///
+/// # Fields
+///
+/// - `consumed`: Compressed bytes consumed from the supplied input slice.
+/// - `produced`: Decoded bytes written into the supplied output slice.
+/// - `ended`: Whether the raw DEFLATE stream reached its end.
+/// - `boundary`: Whether decoding stopped at a reusable non-final block boundary.
+/// - `bits`: Number of unconsumed bits in the last consumed input byte.
 struct Step {
     /// Compressed bytes consumed from the supplied input slice.
     consumed: usize,
@@ -320,6 +384,12 @@ impl Inflater {
     }
 
     /// Reset zlib, prime any unconsumed bits and restore the preceding history dictionary.
+    ///
+    /// # Arguments
+    ///
+    /// - `bits`: Number of unused bits retained from the byte before the checkpoint.
+    /// - `byte`: Compressed byte whose high bits are restored into the DEFLATE bit buffer.
+    /// - `dictionary`: Preceding decompressed history used to restore the DEFLATE window.
     fn restore(&mut self, bits: u8, byte: u8, dictionary: &[u8]) -> io::Result<()> {
         // SAFETY: the stream is initialized and dictionary remains live during
         // the call; zlib copies it into its own sliding window.
@@ -355,6 +425,11 @@ impl Inflater {
     }
 
     /// Decode to the next block boundary or buffer limit and detach borrowed slice pointers.
+    ///
+    /// # Arguments
+    ///
+    /// - `input`: Compressed bytes available to the inflater.
+    /// - `output`: Buffer receiving decompressed output bytes.
     fn step(&mut self, input: &[u8], output: &mut [u8]) -> io::Result<Step> {
         self.stream.next_in = input.as_ptr().cast_mut();
         self.stream.avail_in = input.len() as u32;
@@ -392,6 +467,21 @@ impl Drop for Inflater {
 }
 
 /// Incremental gzip/BGZF reader with member validation and disk-backed seeking.
+///
+/// # Fields
+///
+/// - `input`: Buffered compressed-file reader.
+/// - `inflate`: Raw DEFLATE decoder for the current gzip member.
+/// - `index`: Disk-backed restart table and dictionaries.
+/// - `position`: Current logical offset in the uncompressed stream.
+/// - `member_output`: Uncompressed bytes produced in the current member.
+/// - `member_end`: Expected exclusive compressed offset of the current BGZF member.
+/// - `checksum`: Running CRC32 of the current member's uncompressed bytes.
+/// - `window`: Most recent bytes in this member, capped at the DEFLATE history size.
+/// - `trailer_pending`: Whether the next read must validate the completed member trailer.
+/// - `eof`: Whether reads are at or beyond the known end of the decoded stream.
+/// - `bgzf`: Whether the initial header identified this source as BGZF.
+/// - `identity`: File metadata captured at open for detecting stale source data.
 struct Compressed {
     /// Buffered compressed-file reader.
     input: BufReader<File>,
@@ -431,6 +521,10 @@ impl Compressed {
     }
 
     /// Advance logical offsets, update the member CRC and retain at most 32 KiB of history.
+    ///
+    /// # Arguments
+    ///
+    /// - `bytes`: Newly decompressed bytes used to advance offsets, CRC and history.
     fn remember(&mut self, bytes: &[u8]) {
         self.checksum.update(bytes);
         self.member_output += bytes.len() as u64;
@@ -450,6 +544,11 @@ impl Compressed {
     }
 
     /// Persist a new member start or a sufficiently distant DEFLATE block boundary.
+    ///
+    /// # Arguments
+    ///
+    /// - `bits`: Number of unused bits retained from the byte before the checkpoint.
+    /// - `member_start`: Whether this checkpoint begins a new gzip or BGZF member.
     fn checkpoint(&mut self, bits: u8, member_start: bool) -> io::Result<()> {
         let input = self.input.stream_position()?;
         if input <= self.index.last_input
@@ -508,6 +607,11 @@ impl Compressed {
     }
 
     /// Reposition compressed input and reconstruct decoder, checksum and member state from a point.
+    ///
+    /// # Arguments
+    ///
+    /// - `point`: Restart checkpoint containing compressed and logical offsets, decoder history and
+    ///   checksum state.
     fn restore(&mut self, point: Point) -> io::Result<()> {
         let offset = point
             .input
@@ -530,6 +634,10 @@ impl Compressed {
     }
 
     /// Decode and discard bytes up to a logical offset, allowing positions beyond EOF.
+    ///
+    /// # Arguments
+    ///
+    /// - `target`: Target zero-based byte offset in the logical, decompressed stream.
     fn skip_to(&mut self, target: u64) -> io::Result<()> {
         let mut discard = [0; WINDOW];
         while self.position < target && !self.eof {
@@ -564,6 +672,10 @@ impl Compressed {
 
 impl Read for Compressed {
     /// Decode a bounded chunk, creating restart points and validating completed member trailers.
+    ///
+    /// # Arguments
+    ///
+    /// - `buffer`: Destination buffer for bytes read from the logical, decompressed stream.
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         if buffer.is_empty() || self.eof {
             return Ok(0);
@@ -603,6 +715,10 @@ impl Read for Compressed {
 
 impl Seek for Compressed {
     /// Resolve a logical target, restore a preceding checkpoint when needed and decode up to it.
+    ///
+    /// # Arguments
+    ///
+    /// - `from`: Desired seek origin and offset in logical, decompressed byte coordinates.
     fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
         self.check_identity()?;
         let target = match from {
@@ -643,6 +759,16 @@ impl Seek for Compressed {
 }
 
 /// Decoder restart state pairing compressed offsets with uncompressed stream progress.
+///
+/// # Fields
+///
+/// - `output`: Logical uncompressed byte offset at this restart point.
+/// - `input`: Compressed offset after the last consumed byte; subtract one when `bits` is nonzero.
+/// - `member_output`: Decoded byte count within the current gzip member.
+/// - `member_end`: Exclusive compressed end of the BGZF member, when present.
+/// - `crc`: CRC32 of member bytes decoded before this point.
+/// - `bits`: Unconsumed high bits in the byte immediately before `input`.
+/// - `window`: DEFLATE dictionary preceding this point; empty at a member start.
 struct Point {
     /// Logical uncompressed byte offset at this restart point.
     output: u64,
@@ -662,6 +788,16 @@ struct Point {
 
 /// The point table has fixed 64-byte rows. Dictionaries live separately so a
 /// BGZF block restart (empty dictionary) needs only its table row, not 32 KiB.
+///
+/// # Fields
+///
+/// - `table`: Checkpoint table file, also holding the exclusive writer lock when acquired.
+/// - `windows`: Separate file containing variable-length DEFLATE dictionaries.
+/// - `writable`: Whether this reader owns the lock needed to append or rebuild the cache.
+/// - `count`: Number of committed checkpoint rows visible to this instance.
+/// - `length`: Known uncompressed stream length after successful completion.
+/// - `last_input`: Compressed input offset of the latest committed checkpoint.
+/// - `last_output`: Uncompressed output offset of the latest committed checkpoint.
 struct Index {
     /// Checkpoint table file, also holding the exclusive writer lock when acquired.
     table: File,
@@ -681,6 +817,13 @@ struct Index {
 
 impl Index {
     /// Open the path-keyed index, reuse matching metadata or rebuild it under an exclusive writer lock.
+    ///
+    /// # Arguments
+    ///
+    /// - `directory`: Directory in which the cache files are stored.
+    /// - `path`: Path of the input file to open or display.
+    /// - `identity`: Current source-file metadata fingerprint used to validate cached checkpoints.
+    /// - `bgzf`: Whether the source uses BGZF members with explicit compressed block sizes.
     fn open(directory: &Path, path: &Path, identity: [u64; 7], bgzf: bool) -> io::Result<Self> {
         fs::create_dir_all(directory)?;
         let hash = path
@@ -744,6 +887,11 @@ impl Index {
     }
 
     /// Validate index header, source identity and the last committed point before reuse.
+    ///
+    /// # Arguments
+    ///
+    /// - `identity`: Current source-file metadata fingerprint used to validate cached checkpoints.
+    /// - `bgzf`: Whether the source uses BGZF members with explicit compressed block sizes.
     fn load(&mut self, identity: &[u64; 7], bgzf: bool) -> io::Result<bool> {
         let mut header = [0; INDEX_HEADER as usize];
         self.table.rewind()?;
@@ -774,6 +922,11 @@ impl Index {
     }
 
     /// Write a new checkpoint dictionary and row, then publish its count if this reader owns the lock.
+    ///
+    /// # Arguments
+    ///
+    /// - `point`: Restart checkpoint containing compressed and logical offsets, decoder history and
+    ///   checksum state.
     fn append(&mut self, point: &Point) -> io::Result<()> {
         if !self.writable || (self.count != 0 && point.input <= self.last_input) {
             return Ok(());
@@ -809,6 +962,10 @@ impl Index {
     }
 
     /// Load one checkpoint and dictionary, validating size, bit count and checksum.
+    ///
+    /// # Arguments
+    ///
+    /// - `number`: Zero-based checkpoint row number to load from the index.
     fn read_point(&mut self, number: u64) -> io::Result<Point> {
         let mut row = [0; POINT_SIZE as usize];
         self.table
@@ -840,6 +997,10 @@ impl Index {
     }
 
     /// Binary-search the last checkpoint at or before a logical byte offset.
+    ///
+    /// # Arguments
+    ///
+    /// - `target`: Target zero-based byte offset in the logical, decompressed stream.
     fn find(&mut self, target: u64) -> io::Result<Point> {
         let mut low = 0;
         let mut high = self.count;
@@ -859,6 +1020,10 @@ impl Index {
     }
 
     /// Record the decoded stream length in memory and in the index when writable.
+    ///
+    /// # Arguments
+    ///
+    /// - `length`: Total number of bytes in the decompressed stream.
     fn complete(&mut self, length: u64) -> io::Result<()> {
         self.length = Some(length);
         if self.writable {
@@ -891,6 +1056,12 @@ mod tests {
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
     /// Temporary input and cache paths removed together after each source test.
+    ///
+    /// # Fields
+    ///
+    /// - `directory`: Temporary fixture root, removed on drop.
+    /// - `path`: Input file containing the supplied fixture bytes.
+    /// - `cache`: Directory where source checkpoints may be created.
     struct Fixture {
         /// Temporary fixture root, removed on drop.
         directory: PathBuf,
@@ -902,6 +1073,10 @@ mod tests {
 
     impl Fixture {
         /// Write fixture bytes to an isolated temporary directory with a separate cache path.
+        ///
+        /// # Arguments
+        ///
+        /// - `bytes`: Input bytes used to build the temporary source or compressed test fixture.
         fn new(bytes: &[u8]) -> Self {
             let directory = std::env::temp_dir().join(format!(
                 "seqviz-source-{}-{}",
@@ -932,6 +1107,10 @@ mod tests {
     }
 
     /// Encode fixture bytes as one gzip member.
+    ///
+    /// # Arguments
+    ///
+    /// - `bytes`: Input bytes used to build the temporary source or compressed test fixture.
     fn gzip(bytes: &[u8]) -> Vec<u8> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(bytes).unwrap();
@@ -939,6 +1118,10 @@ mod tests {
     }
 
     /// Build one BGZF member with an explicit block size, CRC and uncompressed length.
+    ///
+    /// # Arguments
+    ///
+    /// - `bytes`: Input bytes used to build the temporary source or compressed test fixture.
     fn bgzf_block(bytes: &[u8]) -> Vec<u8> {
         let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(bytes).unwrap();
@@ -954,6 +1137,12 @@ mod tests {
     }
 
     /// Seek to a logical byte offset and compare the exact range with expected data.
+    ///
+    /// # Arguments
+    ///
+    /// - `source`: Seekable input source used by the operation.
+    /// - `offset`: Zero-based byte offset in the logical, decompressed source stream.
+    /// - `expected`: Exact bytes expected at the requested source offset.
     fn read_at(source: &mut Source, offset: u64, expected: &[u8]) {
         source.seek(SeekFrom::Start(offset)).unwrap();
         let mut actual = vec![0; expected.len()];
@@ -962,6 +1151,10 @@ mod tests {
     }
 
     /// Generate deterministic xorshift bytes to exercise checkpoint restoration.
+    ///
+    /// # Arguments
+    ///
+    /// - `length`: Number of deterministic pseudo-random bytes to generate.
     fn pseudo_random(length: usize) -> Vec<u8> {
         let mut state = 0x13579bdfu32;
         (0..length)

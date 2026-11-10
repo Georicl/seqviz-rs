@@ -7,6 +7,13 @@ use ratatui::{
 };
 
 /// Use the foreground for reference allele 0 and cycle configured colours for ALT alleles.
+///
+/// # Arguments
+///
+/// - `index`: VCF allele index, with zero for REF and positive values for ALT alleles in source
+///   order.
+/// - `config`: VCF display and semantic-colour settings used to style the content.
+/// - `theme`: Shared application colours for text, borders, focus and selection.
 pub(crate) fn allele_color(index: usize, config: &VcfConfig, theme: &Theme) -> Color {
     if index == 0 || config.allele_colors.is_empty() {
         theme.foreground
@@ -16,6 +23,11 @@ pub(crate) fn allele_color(index: usize, config: &VcfConfig, theme: &Theme) -> C
 }
 
 /// Distinguish PASS, missing filters and named filtering failures.
+///
+/// # Arguments
+///
+/// - `value`: Original FILTER text, preserving PASS, missing `.` and named filters.
+/// - `config`: VCF display and semantic-colour settings used to style the content.
 pub(crate) fn filter_color(value: &str, config: &VcfConfig) -> Color {
     match value {
         "PASS" => config.pass_color,
@@ -25,6 +37,12 @@ pub(crate) fn filter_color(value: &str, config: &VcfConfig) -> Color {
 }
 
 /// Keep complete numeric allele tokens together, including multi-digit alleles.
+///
+/// # Arguments
+///
+/// - `value`: Original GT text, including allele numbers, separators and missing values.
+/// - `config`: VCF display and semantic-colour settings used to style the content.
+/// - `theme`: Shared application colours for text, borders, focus and selection.
 pub(crate) fn genotype(value: &str, config: &VcfConfig, theme: &Theme) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut start = 0;
@@ -50,6 +68,13 @@ pub(crate) fn genotype(value: &str, config: &VcfConfig, theme: &Theme) -> Vec<Sp
 }
 
 /// Style a whole allele number, missing marker or genotype separator.
+///
+/// # Arguments
+///
+/// - `value`: One genotype allele, missing-value marker or separator token.
+/// - `digits`: Whether the genotype token contains a numeric allele index.
+/// - `config`: VCF display and semantic-colour settings used to style the content.
+/// - `theme`: Shared application colours for text, borders, focus and selection.
 fn genotype_token(value: &str, digits: bool, config: &VcfConfig, theme: &Theme) -> Span<'static> {
     let color = if digits {
         value
@@ -65,6 +90,11 @@ fn genotype_token(value: &str, digits: bool, config: &VcfConfig, theme: &Theme) 
 }
 
 /// Colour each displayed base using the configured nucleotide palette.
+///
+/// # Arguments
+///
+/// - `value`: Nucleotide allele text to colour one base at a time.
+/// - `config`: VCF display and semantic-colour settings used to style the content.
 pub(crate) fn nucleotides(value: &str, config: &VcfConfig) -> Vec<Span<'static>> {
     value
         .chars()
@@ -78,6 +108,13 @@ pub(crate) fn nucleotides(value: &str, config: &VcfConfig) -> Vec<Span<'static>>
 }
 
 /// An AD segment uses the same reference/ALT index as its GT token.
+///
+/// # Arguments
+///
+/// - `value`: Comma-separated AD depths in REF/ALT allele order.
+/// - `width`: Available width of the allele-depth bar in terminal columns.
+/// - `config`: VCF display and semantic-colour settings used to style the content.
+/// - `theme`: Shared application colours for text, borders, focus and selection.
 pub(crate) fn allele_depth(
     value: &str,
     width: usize,

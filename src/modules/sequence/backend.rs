@@ -21,6 +21,15 @@ const PUBLISH_INTERVAL: Duration = Duration::from_millis(100);
 const STATS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A dataset shared by alias tabs, with cached metadata, statistics and fatal I/O state.
+///
+/// # Fields
+///
+/// - `dataset`: Indexed source shared by every tab with the same canonical owner.
+/// - `file_size`: Physical source size captured once when the shared dataset opens.
+/// - `failure`: Fatal I/O failure remembered to stop retries and include in snapshots.
+/// - `stats`: Last statistics result, reused until indexed progress changes.
+/// - `stats_progress`: Scan state used to produce the cached statistics.
+/// - `last_stats`: Time of the last statistics attempt, used to throttle partial refreshes.
 pub(super) struct Slot {
     /// Indexed source shared by every tab with the same canonical owner.
     pub(super) dataset: Dataset,
@@ -37,6 +46,11 @@ pub(super) struct Slot {
 }
 
 /// Pause and statistics preferences that remain independent for each alias tab.
+///
+/// # Fields
+///
+/// - `paused`: Whether this tab has explicitly paused background indexing.
+/// - `statistics`: Whether this tab has requested statistics updates.
 #[derive(Default)]
 struct TabState {
     /// Whether this tab has explicitly paused background indexing.
@@ -46,6 +60,14 @@ struct TabState {
 }
 
 /// Comparable scan progress used to invalidate snapshots and cached statistics.
+///
+/// # Fields
+///
+/// - `records`: Number of records discovered by the scanner.
+/// - `bytes`: Number of decoded source bytes scanned.
+/// - `complete`: Whether scanning reached the end of the source.
+/// - `errors`: Number of parser errors recorded in the index.
+/// - `error`: Fatal scan error that prevents further progress.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct ProgressKey {
     /// Number of records discovered by the scanner.
@@ -61,6 +83,10 @@ pub(super) struct ProgressKey {
 }
 impl From<&Progress> for ProgressKey {
     /// Extract the progress fields that determine whether cached results have changed.
+    ///
+    /// # Arguments
+    ///
+    /// - `progress`: Committed scan progress used to detect changes to cached results.
     fn from(progress: &Progress) -> Self {
         Self {
             records: progress.records,
@@ -73,6 +99,25 @@ impl From<&Progress> for ProgressKey {
 }
 
 /// Owns sequence datasets and advances work for the active viewport on the worker thread.
+///
+/// # Fields
+///
+/// - `files`: Open-tab state and canonical dataset ownership mapping.
+/// - `cache`: Directory for sequence indexes and source seek checkpoints.
+/// - `slots`: Lazily opened datasets stored only at canonical owner indices.
+/// - `tabs`: Independent pause/statistics preferences indexed by tab.
+/// - `view`: Active viewport controlling which dataset advances.
+/// - `search`: Pending cancellable name search for the active context.
+/// - `copy`: Pending cancellable copy waiting for its record or range.
+/// - `last_operation_id`: Highest accepted operation ID, preventing stale requests from replacing
+///   current work.
+/// - `foreground_read`: Whether navigation still needs an indexed prefix even while background work
+///   is paused.
+/// - `dirty`: Whether changes require a fresh viewport snapshot.
+/// - `last_publish`: Timestamp used to throttle viewport publication.
+/// - `working`: Whether the next worker tick should run without waiting for a request.
+/// - `updates`: Channel carrying sequence snapshots and operation results to the session.
+/// - `cancel`: Shared cancellation flag checked by expensive statistics queries.
 pub(crate) struct Backend {
     /// Open-tab state and canonical dataset ownership mapping.
     files: SessionFiles,
@@ -106,6 +151,14 @@ pub(crate) struct Backend {
 
 impl Backend {
     /// Create unopened dataset slots and independent pause/statistics state for each tab.
+    ///
+    /// # Arguments
+    ///
+    /// - `files`: Input paths and the mapping from alias tabs to shared dataset owners.
+    /// - `cache`: Directory for reusable record indexes and source checkpoints.
+    /// - `updates`: Channel through which completed work and status messages are sent to the
+    ///   caller.
+    /// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
     pub(crate) fn new(
         files: SessionFiles,
         cache: PathBuf,
@@ -153,6 +206,12 @@ impl Backend {
     }
 
     /// Accept a newer, uncancelled operation for the current file and resume its scan.
+    ///
+    /// # Arguments
+    ///
+    /// - `file`: Zero-based tab ID used to route requests and results.
+    /// - `operation_id`: Monotonic operation ID used to reject superseded requests and replies.
+    /// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
     fn accept_operation(&mut self, file: usize, operation_id: u64, cancel: &AtomicBool) -> bool {
         if self.view.as_ref().is_none_or(|v| v.file != file)
             || operation_id <= self.last_operation_id
@@ -168,6 +227,10 @@ impl Backend {
     }
 
     /// Open the shared dataset on demand, replace the viewport and cancel jobs on context changes.
+    ///
+    /// # Arguments
+    ///
+    /// - `next`: Replacement viewport specifying the active file, selection and visible range.
     fn set_view(&mut self, next: ViewRequest) {
         let file = next.file;
         if !self.files.is_open(file) {
@@ -216,6 +279,10 @@ impl Backend {
     }
 
     /// Apply a request, opening a dataset for a new view when needed; return false on Quit.
+    ///
+    /// # Arguments
+    ///
+    /// - `request`: Request to dispatch to or handle in the owning backend.
     fn request(&mut self, request: Request) -> bool {
         match request {
             Request::Quit => {
@@ -289,6 +356,10 @@ impl Backend {
     }
 
     /// Close one tab and release its shared dataset only when its final alias closes.
+    ///
+    /// # Arguments
+    ///
+    /// - `file`: Zero-based tab ID used to route requests and results.
     fn close(&mut self, file: usize) {
         let Some((owner, last_alias)) = self.files.close(file) else {
             return;
@@ -378,6 +449,16 @@ impl Backend {
 
 /// Recompute requested statistics when progress changes and the throttle allows it.
 /// Return whether the cached statistics were replaced.
+///
+/// # Arguments
+///
+/// - `slot`: Open dataset together with its cached statistics and failure state.
+/// - `tab`: Per-tab pause and statistics preferences for the active dataset.
+/// - `key`: Scan-progress fingerprint against which cached statistics are compared.
+/// - `stopped`: Whether scanning has completed or failed, so no further indexed data can arrive.
+/// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
+/// - `updates`: Channel through which completed work and status messages are sent to the caller.
+/// - `file`: Zero-based tab ID used to route requests and results.
 fn update_statistics(
     slot: &mut Slot,
     tab: &mut TabState,
@@ -413,11 +494,23 @@ fn update_statistics(
 }
 
 /// Publish a file-scoped status message, ignoring a disconnected receiver.
+///
+/// # Arguments
+///
+/// - `updates`: Channel through which completed work and status messages are sent to the caller.
+/// - `file`: Zero-based tab ID used to route requests and results.
+/// - `text`: Status or input/output error message displayed for the specified tab.
 fn message(updates: &mpsc::Sender<Update>, file: usize, text: String) {
     let _ = updates.send(Update::Message { file, text });
 }
 
 /// Read the bounded record list and sequence window, attaching cached statistics and failures.
+///
+/// # Arguments
+///
+/// - `slot`: Open dataset together with its cached statistics and failure state.
+/// - `request`: Viewport identifying the file, selected record and visible region to load.
+/// - `paused`: Whether automatic background indexing is paused for this tab.
 fn snapshot(slot: &mut Slot, request: ViewRequest, paused: bool) -> io::Result<Snapshot> {
     let record = slot.dataset.record(request.record)?;
     let window = if record.is_some() {
@@ -460,6 +553,11 @@ impl Driver for Backend {
     }
 
     /// Coalesce adjacent viewport requests while preserving intervening operation ordering.
+    ///
+    /// # Arguments
+    ///
+    /// - `incoming`: Requests in arrival order, with adjacent viewport refreshes eligible for
+    ///   coalescing.
     fn handle_requests(&mut self, incoming: impl Iterator<Item = Request>) -> bool {
         // Coalesce adjacent views only. An action between views needs the preceding context.
         let mut pending_view = None;

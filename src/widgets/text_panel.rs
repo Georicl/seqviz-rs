@@ -10,6 +10,12 @@ use ratatui::{
 use unicode_width::UnicodeWidthChar;
 
 /// Wrapped text, scroll offset and inclusive selection endpoints in character coordinates.
+///
+/// # Fields
+///
+/// - `scroll`: Zero-based index of the first visible wrapped row.
+/// - `lines`: Text after display-width wrapping.
+/// - `selection`: Inclusive (row, character-index) endpoints; drag direction may be reversed.
 #[derive(Default)]
 pub struct State {
     /// Zero-based index of the first visible wrapped row.
@@ -22,6 +28,12 @@ pub struct State {
 
 impl State {
     /// Wrap replacement lines to display width and clamp scrolling to the visible height.
+    ///
+    /// # Arguments
+    ///
+    /// - `lines`: Replacement logical lines to wrap into the text panel.
+    /// - `width`: Available width measured in terminal display columns.
+    /// - `height`: Available height measured in terminal rows.
     pub fn reflow(&mut self, lines: Vec<String>, width: u16, height: u16) {
         self.lines = lines
             .into_iter()
@@ -33,6 +45,12 @@ impl State {
     }
 
     /// Convert a pointer in the inner text area to row and character indices.
+    ///
+    /// # Arguments
+    ///
+    /// - `area`: Terminal rectangle available for this layout or component.
+    /// - `x`: Zero-based terminal column of the pointer.
+    /// - `y`: Zero-based terminal row of the pointer.
     pub fn position(&self, area: Rect, x: u16, y: u16) -> (usize, usize) {
         let row =
             self.scroll + usize::from(y.saturating_sub(area.y).min(area.height.saturating_sub(1)));
@@ -83,6 +101,14 @@ impl State {
 }
 
 /// Render a bordered scrolling panel with per-character selection backgrounds.
+///
+/// # Arguments
+///
+/// - `frame`: Terminal frame into which the current content is drawn.
+/// - `area`: Terminal rectangle available for this layout or component.
+/// - `title`: Panel title rendered in the border.
+/// - `state`: Wrapped text, scrolling and selection state to draw.
+/// - `theme`: Shared application colours for text, borders, focus and selection.
 pub fn draw(frame: &mut Frame, area: Rect, title: &str, state: &State, theme: &Theme) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -123,6 +149,11 @@ pub fn draw(frame: &mut Frame, area: Rect, title: &str, state: &State, theme: &T
 }
 
 /// Wrap by terminal display columns and omit control characters, retaining an empty row.
+///
+/// # Arguments
+///
+/// - `line`: Original logical text line to format or wrap.
+/// - `width`: Available width measured in terminal display columns.
 pub fn wrap_line(line: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut row = String::new();

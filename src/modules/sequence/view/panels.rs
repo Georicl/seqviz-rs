@@ -4,6 +4,10 @@ use crate::core::paths as config;
 use crate::modules::sequence::data::SeqType;
 
 /// Build the active help, file, record or statistics page from the latest view state.
+///
+/// # Arguments
+///
+/// - `app`: Sequence-page state containing the loaded snapshot, navigation and display settings.
 pub(crate) fn text(app: &SequenceView) -> Vec<String> {
     let Some(page) = app.page else {
         return Vec::new();
@@ -218,6 +222,10 @@ pub(crate) fn text(app: &SequenceView) -> Vec<String> {
 }
 
 /// Render an optional integer metric, using n/a when no value is available.
+///
+/// # Arguments
+///
+/// - `value`: Optional integer metric, rendered as `n/a` when absent.
 fn opt(value: Option<u64>) -> String {
     value.map(|v| v.to_string()).unwrap_or_else(|| "n/a".into())
 }

@@ -7,6 +7,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
 
 /// Construct a populated VCF view at the requested terminal size with named sample columns.
+///
+/// # Arguments
+///
+/// - `width`: Available width measured in terminal display columns.
+/// - `height`: Available height measured in terminal rows.
+/// - `samples`: Sample names included in the synthetic VCF header.
 fn fixture(width: u16, height: u16, samples: &[&str]) -> VcfView {
     let mut view = VcfView::new(
         "variants.vcf".into(),
@@ -89,10 +95,20 @@ fn fixture(width: u16, height: u16, samples: &[&str]) -> VcfView {
 }
 
 /// Dispatch one unmodified key press to the test view.
+///
+/// # Arguments
+///
+/// - `view`: Document state containing the current layout, selection and loaded data.
+/// - `code`: Key code used to construct an unmodified keyboard event.
 fn key(view: &mut VcfView, code: KeyCode) {
     view.key(KeyEvent::new(code, KeyModifiers::NONE));
 }
 /// Collect all cell symbols from a rendered terminal row.
+///
+/// # Arguments
+///
+/// - `terminal`: Test terminal whose rendered buffer is inspected.
+/// - `y`: Zero-based terminal row of the pointer.
 fn row(terminal: &Terminal<TestBackend>, y: u16) -> String {
     let area = terminal.backend().buffer().area;
     (0..area.width)

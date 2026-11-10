@@ -14,6 +14,11 @@ pub(super) fn cancelled() -> io::Error {
 }
 
 /// Try platform clipboard tools in order until one succeeds or cancellation is requested.
+///
+/// # Arguments
+///
+/// - `text`: UTF-8 text to copy to the system or terminal clipboard.
+/// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
 pub(super) fn copy(text: &str, cancel: &AtomicBool) -> io::Result<()> {
     let commands: &[(&str, &[&str])] = match env::consts::OS {
         "macos" => &[("pbcopy", &[])],
@@ -42,6 +47,13 @@ pub(super) fn copy(text: &str, cancel: &AtomicBool) -> io::Result<()> {
 }
 
 /// Write text through a scoped pipe writer while polling and cancelling the child process.
+///
+/// # Arguments
+///
+/// - `command`: Clipboard executable to launch.
+/// - `args`: Arguments passed to the clipboard executable, excluding its program name.
+/// - `text`: UTF-8 text to copy to the system or terminal clipboard.
+/// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
 fn run_command(command: &str, args: &[&str], text: &str, cancel: &AtomicBool) -> io::Result<()> {
     let mut child = Command::new(command)
         .args(args)

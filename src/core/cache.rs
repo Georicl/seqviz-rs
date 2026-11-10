@@ -8,6 +8,10 @@ use std::{
 };
 
 /// Capture device, inode, byte length and nanosecond mtime/ctime for cache validation.
+///
+/// # Arguments
+///
+/// - `metadata`: Filesystem metadata whose identity fields are recorded for cache validation.
 pub(crate) fn file_identity(metadata: &fs::Metadata) -> [u64; 7] {
     [
         metadata.dev(),
@@ -22,6 +26,11 @@ pub(crate) fn file_identity(metadata: &fs::Metadata) -> [u64; 7] {
 /// Acquire a cache writer lock or create an isolated reader directory on contention.
 ///
 /// Returns the directory, a file that holds the lock, and whether the directory is private.
+///
+/// # Arguments
+///
+/// - `directory`: Directory in which the cache files are stored.
+/// - `key`: Source and schema fingerprint used to name and reserve the cache.
 pub(crate) fn lock_cache(directory: &Path, key: u64) -> io::Result<(PathBuf, File, bool)> {
     let open_lock = |directory: &Path| {
         OpenOptions::new()

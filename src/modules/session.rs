@@ -15,6 +15,12 @@ use std::{
 };
 
 /// Alias tabs keep independent view state and share a single backend dataset.
+///
+/// # Fields
+///
+/// - `paths`: Original input paths indexed by stable tab ID.
+/// - `owners`: First tab ID for each canonical path, shared by alias tabs.
+/// - `closed`: Per-tab closure flags used to find the final live alias.
 pub(crate) struct SessionFiles {
     /// Original input paths indexed by stable tab ID.
     paths: Vec<PathBuf>,
@@ -27,6 +33,10 @@ pub(crate) struct SessionFiles {
 /// Resolve canonical paths to stable dataset owners while retaining independent tab slots.
 impl SessionFiles {
     /// Group aliases by canonical path, falling back to the original path if resolution fails.
+    ///
+    /// # Arguments
+    ///
+    /// - `paths`: Input file paths in command-line order.
     pub(crate) fn new(paths: Vec<PathBuf>) -> Self {
         let mut canonical_owners = HashMap::new();
         let owners = paths
@@ -51,21 +61,37 @@ impl SessionFiles {
     }
 
     /// Return the original input path for a valid tab ID.
+    ///
+    /// # Arguments
+    ///
+    /// - `file`: Zero-based tab ID used to route requests and results.
     pub(crate) fn path(&self, file: usize) -> &Path {
         &self.paths[file]
     }
 
     /// Return the first tab ID whose canonical path matches this tab's path.
+    ///
+    /// # Arguments
+    ///
+    /// - `file`: Zero-based tab ID used to route requests and results.
     pub(crate) fn owner(&self, file: usize) -> usize {
         self.owners[file]
     }
 
     /// Check that a tab ID exists and has not been closed.
+    ///
+    /// # Arguments
+    ///
+    /// - `file`: Zero-based tab ID used to route requests and results.
     pub(crate) fn is_open(&self, file: usize) -> bool {
         self.closed.get(file).is_some_and(|closed| !closed)
     }
 
     /// Return the owner and whether closing this tab removes its final alias.
+    ///
+    /// # Arguments
+    ///
+    /// - `file`: Zero-based tab ID used to route requests and results.
     pub(crate) fn close(&mut self, file: usize) -> Option<(usize, bool)> {
         *self.closed.get_mut(file)? = true;
         let owner = self.owner(file);
@@ -79,6 +105,10 @@ impl SessionFiles {
 }
 
 /// Application-facing handle for session requests, updates and background cancellation.
+///
+/// # Fields
+///
+/// - `tasks`: Generic transport and thread lifetime for the domain-aware session.
 pub struct Worker {
     /// Generic transport and thread lifetime for the domain-aware session.
     tasks: TaskWorker<ModuleRequest, ModuleUpdate>,
@@ -86,6 +116,11 @@ pub struct Worker {
 
 impl Worker {
     /// Construct the session and its domain backends on the background worker thread.
+    ///
+    /// # Arguments
+    ///
+    /// - `paths`: Input file paths in command-line order.
+    /// - `cache`: Directory for reusable record indexes and source checkpoints.
     pub fn start(paths: Vec<PathBuf>, cache: PathBuf) -> Self {
         Self {
             // The closure receives an update sender and the shared cancellation flag.
@@ -97,11 +132,19 @@ impl Worker {
     }
 
     /// Forward a routed request to the generic task worker without waiting for a reply.
+    ///
+    /// # Arguments
+    ///
+    /// - `request`: Request to dispatch to or handle in the owning backend.
     pub(crate) fn send_module(&self, request: ModuleRequest) {
         self.tasks.send(request);
     }
 
     /// Keep the sequence request entry point for existing library callers.
+    ///
+    /// # Arguments
+    ///
+    /// - `request`: Request to dispatch to or handle in the owning backend.
     pub fn send(&self, request: sequence::protocol::Request) {
         self.send_module(ModuleRequest::sequence(request));
     }
@@ -118,6 +161,18 @@ impl Deref for Worker {
 }
 
 /// One runner owns both domain backends; only the active domain advances I/O.
+///
+/// # Fields
+///
+/// - `files`: Session-level tab and canonical-path ownership state.
+/// - `cache`: Root directory used for source probing and backend indexes.
+/// - `modules`: Detected module per dataset owner; aliases resolve through `files`.
+/// - `active`: Domain whose incremental I/O may advance on the next tick.
+/// - `sequence`: Sequence backend and its owned datasets.
+/// - `vcf`: VCF backend and its owned datasets.
+/// - `sequence_updates`: Sequence replies waiting to be wrapped and forwarded.
+/// - `vcf_updates`: VCF replies waiting to be wrapped and forwarded.
+/// - `updates`: Application-facing channel for probe results and domain replies.
 struct Session {
     /// Session-level tab and canonical-path ownership state.
     files: SessionFiles,
@@ -142,6 +197,14 @@ struct Session {
 /// Coordinate format detection, request routing and incremental work across both domains.
 impl Session {
     /// Create both backends and update channels with matching, independently owned file maps.
+    ///
+    /// # Arguments
+    ///
+    /// - `paths`: Input file paths in command-line order.
+    /// - `cache`: Directory for reusable record indexes and source checkpoints.
+    /// - `updates`: Channel through which completed work and status messages are sent to the
+    ///   caller.
+    /// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
     fn new(
         paths: Vec<PathBuf>,
         cache: PathBuf,
@@ -169,6 +232,10 @@ impl Session {
     }
 
     /// Pause the active scan, probe up to 8192 decoded bytes and report the detected domain.
+    ///
+    /// # Arguments
+    ///
+    /// - `file`: Zero-based tab ID used to route requests and results.
     fn open(&mut self, file: usize) {
         if !self.files.is_open(file) {
             return;
@@ -202,6 +269,12 @@ impl Session {
     }
 
     /// Drain queued sequence requests, then VCF requests, stopping if either backend exits.
+    ///
+    /// # Arguments
+    ///
+    /// - `sequence`: Queued sequence-domain requests to dispatch before crossing a routing
+    ///   boundary.
+    /// - `vcf`: Queued VCF-domain requests to dispatch after pending sequence requests.
     fn flush(
         &mut self,
         sequence: &mut Vec<sequence::protocol::Request>,
@@ -225,6 +298,10 @@ impl Driver for Session {
     }
 
     /// Route requests in order, flush at domain/lifecycle boundaries and ignore closed-tab views.
+    ///
+    /// # Arguments
+    ///
+    /// - `requests`: Batch of backend requests to process in arrival order.
     fn handle_requests(&mut self, requests: impl Iterator<Item = ModuleRequest>) -> bool {
         let mut sequence = Vec::new();
         let mut vcf = Vec::new();

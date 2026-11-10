@@ -3,6 +3,11 @@
 use super::*;
 
 /// Minimal messages used to observe batching and ordered shutdown.
+///
+/// # Variants
+///
+/// - `Value`: Value accumulated for the next batch update.
+/// - `Quit`: Stop the recorder after checking the cancellation flag.
 enum Request {
     /// Value accumulated for the next batch update.
     Value(u8),
@@ -11,6 +16,13 @@ enum Request {
 }
 
 /// Test driver that reports each batch and records cancellation during shutdown.
+///
+/// # Fields
+///
+/// - `updates`: Channel used to report values processed in one batch.
+/// - `values`: Values accumulated since the previous tick.
+/// - `cancel`: Cancellation flag supplied by the task worker.
+/// - `stopped`: Records whether shutdown observed cancellation.
 struct Recorder {
     /// Channel used to report values processed in one batch.
     updates: mpsc::Sender<Vec<u8>>,
@@ -32,6 +44,10 @@ impl Driver for Recorder {
     }
 
     /// Accumulate values and capture the cancellation flag when shutdown is received.
+    ///
+    /// # Arguments
+    ///
+    /// - `requests`: Batch of backend requests to process in arrival order.
     fn handle_requests(&mut self, requests: impl Iterator<Item = Request>) -> bool {
         for request in requests {
             match request {

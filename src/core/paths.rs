@@ -21,6 +21,11 @@ pub fn config_path() -> Option<PathBuf> {
 }
 
 /// Resolve configuration precedence without reading or changing process environment.
+///
+/// # Arguments
+///
+/// - `xdg`: Candidate XDG configuration directory. Only an absolute path is used.
+/// - `home`: Home directory used when no valid XDG configuration directory is available.
 fn config_path_from(xdg: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
     xdg.filter(|p| p.is_absolute())
         .or_else(|| home.map(|p| p.join(".config")))

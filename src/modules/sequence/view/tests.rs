@@ -12,6 +12,11 @@ use ratatui::{Terminal, layout::Rect};
 use std::{path::PathBuf, sync::atomic::Ordering};
 
 /// Fully index a fixture and seed a document view with its first snapshot and statistics.
+///
+/// # Arguments
+///
+/// - `path`: Path of the input file to open or display.
+/// - `cache`: Directory for reusable record indexes and source checkpoints.
 fn app(path: PathBuf, cache: &std::path::Path) -> SequenceView {
     let mut data = Dataset::open(&path, cache).unwrap();
     while !data.progress().complete && data.progress().error.is_none() {
@@ -56,6 +61,10 @@ fn app(path: PathBuf, cache: &std::path::Path) -> SequenceView {
 }
 
 /// Construct an unmodified key event for interaction tests.
+///
+/// # Arguments
+///
+/// - `code`: Key code used to construct an unmodified keyboard event.
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }

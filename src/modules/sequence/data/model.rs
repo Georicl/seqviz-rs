@@ -1,6 +1,13 @@
 //! Public values shared by data, worker and UI; no storage or terminal dependencies.
 
 /// Supported record formats after source decompression.
+///
+/// # Variants
+///
+/// - `Fasta`: Defline-based text records containing sequence.
+/// - `Fastq`: Text records containing sequence and Phred+33 quality.
+/// - `Sam`: Tab-delimited alignment records with optional sequence and quality.
+/// - `Bam`: Binary alignment records decoded from logical BAM bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     /// Defline-based text records containing sequence.
@@ -37,6 +44,13 @@ impl Format {
 }
 
 /// Sequence alphabet inferred from a sample or forced by the input format or extension.
+///
+/// # Variants
+///
+/// - `Dna`: Nucleotide alphabet, including supported ambiguity symbols and uracil.
+/// - `Protein`: Protein alphabet inferred from diagnostic residues or selected by the file
+///   extension.
+/// - `Unknown`: Sample not confidently classified as nucleotide or protein.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeqType {
     /// Nucleotide alphabet, including supported ambiguity symbols and uracil.
@@ -48,6 +62,13 @@ pub enum SeqType {
 }
 
 /// Compact list entry for an indexed record, including records still being scanned.
+///
+/// # Fields
+///
+/// - `id`: Zero-based record ID in source order.
+/// - `name`: First whitespace-delimited token of the defline or alignment read name.
+/// - `length`: Number of sequence symbols indexed so far.
+/// - `complete`: Whether the scanner has reached the end of this record.
 #[derive(Debug, Clone)]
 pub struct RecordSummary {
     /// Zero-based record ID in source order.
@@ -61,6 +82,22 @@ pub struct RecordSummary {
 }
 
 /// Indexed record details and statistics used by the selected-record view.
+///
+/// # Fields
+///
+/// - `id`: Zero-based record ID in source order.
+/// - `name`: Record identifier without the remaining defline description.
+/// - `header`: The complete defline without the leading `>` or `@`.
+/// - `plus`: FASTQ's complete separator line, including its leading `+`.
+/// - `length`: Number of sequence symbols indexed so far.
+/// - `quality_length`: Number of quality scores indexed so far.
+/// - `complete`: Whether the record has been fully scanned.
+/// - `seq_type`: Sequence alphabet selected from the format, extension or sampled sequence.
+/// - `gc`: GC percentage for a complete, nonempty DNA record; otherwise absent.
+/// - `quality`: Aggregates for a complete record with at least one quality score.
+/// - `fields`: Ordered header or alignment metadata displayed for this record.
+/// - `has_sequence`: Whether sequence is present, independently of its current indexed length.
+/// - `has_quality`: Whether at least one quality score has been indexed.
 #[derive(Debug, Clone)]
 pub struct RecordMeta {
     /// Zero-based record ID in source order.
@@ -92,6 +129,14 @@ pub struct RecordMeta {
 }
 
 /// Phred quality statistics for a completed record with quality data.
+///
+/// # Fields
+///
+/// - `min`: Lowest numeric Phred score.
+/// - `max`: Highest numeric Phred score.
+/// - `mean`: Arithmetic mean of numeric Phred scores.
+/// - `q30`: Percentage, in the range 0..=100.
+/// - `overview`: Integer-truncated mean Phred score in each successive positional bin.
 #[derive(Debug, Clone)]
 pub struct QualityStats {
     /// Lowest numeric Phred score.
@@ -107,6 +152,12 @@ pub struct QualityStats {
 }
 
 /// Decoded sequence and quality bytes for a requested zero-based interval.
+///
+/// # Fields
+///
+/// - `start`: Requested zero-based sequence coordinate of the window.
+/// - `sequence`: Decoded sequence symbols available in the requested interval.
+/// - `quality`: Phred+33 ASCII characters, including for BAM input.
 #[derive(Debug, Clone, Default)]
 pub struct SequenceWindow {
     /// Requested zero-based sequence coordinate of the window.
@@ -118,6 +169,15 @@ pub struct SequenceWindow {
 }
 
 /// Committed scan status, including partial records and recoverable or fatal errors.
+///
+/// # Fields
+///
+/// - `records`: Number of indexed records, including a current partial record.
+/// - `complete`: Whether scanning reached clean end of input, even if recoverable errors occurred.
+/// - `scanned_bytes`: Logical, decompressed source bytes consumed by committed scan steps.
+/// - `errors`: Number of recorded recoverable and fatal input errors.
+/// - `last_error`: The most recent input error, including recoverable SAM row errors.
+/// - `error`: A fatal error stops this file. Recoverable SAM errors only increment errors.
 #[derive(Debug, Clone, Default)]
 pub struct Progress {
     /// Number of indexed records, including a current partial record.
@@ -135,6 +195,20 @@ pub struct Progress {
 }
 
 /// File aggregates computed from completed records that contain sequence.
+///
+/// # Fields
+///
+/// - `records`: Number of all indexed records, including a current partial record.
+/// - `sequence_records`: Number of completed records that have sequence.
+/// - `total_length`: Sum of lengths over completed sequence-bearing records.
+/// - `min_length`: Shortest completed sequence length, if any sequence-bearing record exists.
+/// - `max_length`: Longest completed sequence length, if any sequence-bearing record exists.
+/// - `mean_length`: Arithmetic mean length of completed sequence-bearing records.
+/// - `n50`: Length at which descending lengths reach half the total, for FASTA and FASTQ only.
+/// - `gc`: GC percentage when every included record is DNA and total length is nonzero.
+/// - `protein`: Whether every included record is protein and at least one record is included.
+/// - `complete`: Whether scanning finished with no recorded input errors.
+/// - `errors`: Number of recorded input errors.
 #[derive(Debug, Clone, Default)]
 pub struct Stats {
     /// Number of all indexed records, including a current partial record.

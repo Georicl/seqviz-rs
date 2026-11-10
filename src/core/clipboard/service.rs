@@ -12,6 +12,13 @@ use std::{
 };
 
 /// Queued text plus document/operation identity and a cooperative cancellation flag.
+///
+/// # Fields
+///
+/// - `operation_id`: Copy operation ID used to discard superseded results.
+/// - `file`: Stable destination tab ID.
+/// - `text`: Text passed to the clipboard backend or OSC 52 encoder.
+/// - `cancel`: Cancellation flag shared with the originating page.
 struct CopyRequest {
     /// Copy operation ID used to discard superseded results.
     operation_id: u64,
@@ -24,6 +31,12 @@ struct CopyRequest {
 }
 
 /// Clipboard result tagged so the UI can discard stale or inactive operations.
+///
+/// # Fields
+///
+/// - `operation_id`: Copy operation ID used to discard superseded results.
+/// - `file`: Stable destination tab ID.
+/// - `result`: Prepared clipboard output or the error from the selected backend.
 pub struct ClipboardUpdate {
     /// Copy operation ID used to discard superseded results.
     pub operation_id: u64,
@@ -34,6 +47,13 @@ pub struct ClipboardUpdate {
 }
 
 /// One backend thread and at most one queued copy. Submitting never waits for a command.
+///
+/// # Fields
+///
+/// - `requests`: Bounded queue sender, removed during shutdown to disconnect the worker.
+/// - `updates`: Completed copy results for validation and delivery by the UI.
+/// - `state`: Shared shutdown flag and active backend cancellation handle.
+/// - `thread`: Worker handle joined after active work is cancelled.
 pub struct ClipboardService {
     /// Bounded queue sender, removed during shutdown to disconnect the worker.
     requests: Option<mpsc::SyncSender<CopyRequest>>,
@@ -46,6 +66,11 @@ pub struct ClipboardService {
 }
 
 /// Mutex-protected shutdown state and cancellation handle for the active copy.
+///
+/// # Fields
+///
+/// - `stopping`: Prevents a queued request from starting during shutdown.
+/// - `active`: Cancellation flag for the copy currently running in the backend.
 #[derive(Default)]
 struct ServiceState {
     /// Prevents a queued request from starting during shutdown.
@@ -64,6 +89,11 @@ impl ClipboardService {
     }
 
     /// Start a bounded worker with an injectable system backend and explicit SSH mode.
+    ///
+    /// # Arguments
+    ///
+    /// - `ssh`: Whether to prepare terminal clipboard output for an SSH session.
+    /// - `backend`: System clipboard callback receiving the text and its cancellation flag.
     fn start_with(
         ssh: bool,
         mut backend: impl FnMut(&str, &AtomicBool) -> io::Result<()> + Send + 'static,
@@ -101,6 +131,14 @@ impl ClipboardService {
     }
 
     /// The document's copy permission is checked before queueing text or calling a backend.
+    ///
+    /// # Arguments
+    ///
+    /// - `operation_id`: Monotonic operation ID used to reject superseded requests and replies.
+    /// - `file`: Zero-based tab ID used to route requests and results.
+    /// - `text`: UTF-8 text to copy to the system or terminal clipboard.
+    /// - `copy_allowed`: Whether the originating document permits copying this text.
+    /// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
     pub fn submit(
         &self,
         operation_id: u64,
@@ -154,6 +192,13 @@ impl Drop for ClipboardService {
 }
 
 /// Try a local system copy or prepare OSC 52 under SSH/failure, respecting cancellation.
+///
+/// # Arguments
+///
+/// - `text`: UTF-8 text to copy to the system or terminal clipboard.
+/// - `ssh`: Whether to prepare terminal clipboard output for an SSH session.
+/// - `cancel`: Shared cancellation flag. Setting it to `true` asks the operation to stop.
+/// - `backend`: System clipboard callback receiving the text and its cancellation flag.
 fn prepare(
     text: &str,
     ssh: bool,

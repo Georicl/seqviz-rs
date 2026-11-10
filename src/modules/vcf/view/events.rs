@@ -6,6 +6,10 @@ use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKin
 
 impl VcfView {
     /// Route keys through modal editors/overlays before table and detail navigation.
+    ///
+    /// # Arguments
+    ///
+    /// - `event`: Keyboard event received from the terminal or the application shell.
     pub(super) fn key_event(&mut self, event: KeyEvent) {
         self.redraw = true;
         if self.input.is_some() {
@@ -127,6 +131,10 @@ impl VcfView {
         }
     }
     /// Edit contig or position input and submit a validated selection or lookup request.
+    ///
+    /// # Arguments
+    ///
+    /// - `event`: Keyboard event received from the terminal or the application shell.
     fn input_event(&mut self, event: KeyEvent) {
         let picker = matches!(self.input, Some(Input::Contig(_)));
         match event.code {
@@ -205,6 +213,10 @@ impl VcfView {
         self.message.clear();
     }
     /// Move by a signed row count in the focused table or detail panel.
+    ///
+    /// # Arguments
+    ///
+    /// - `delta`: Signed number of rows to move in the focused table or detail panel.
     fn move_row(&mut self, delta: i64) {
         if self.focus == Focus::Table {
             self.change_record(self.selected.saturating_add_signed(delta));
@@ -213,6 +225,10 @@ impl VcfView {
         self.select_detail_row(self.detail_row.saturating_add_signed(delta as isize));
     }
     /// Clamp the selected detail row, clear dragged text and scroll it into view.
+    ///
+    /// # Arguments
+    ///
+    /// - `row`: Zero-based logical row to select in the active detail tab.
     fn select_detail_row(&mut self, row: usize) {
         self.selection = None;
         self.dragging = false;
@@ -228,6 +244,11 @@ impl VcfView {
     }
     /// Map a terminal cell to a logical detail row and original character index.
     /// Account for horizontal scrolling, tab stops and complete grapheme clusters.
+    ///
+    /// # Arguments
+    ///
+    /// - `x`: Zero-based terminal column of the pointer.
+    /// - `y`: Zero-based terminal row of the pointer.
     pub(super) fn detail_position(&self, x: u16, y: u16) -> (usize, usize) {
         let area = self.layout.detail_body;
         let row = (self.detail_start
@@ -254,6 +275,11 @@ impl VcfView {
         (row, index)
     }
     /// Handle contig picking, panel focus, row clicks and original-text drag selection.
+    ///
+    /// # Arguments
+    ///
+    /// - `event`: Pointer event received from the terminal, including its position and button or
+    ///   scroll action.
     pub(super) fn mouse_event(&mut self, event: MouseEvent) {
         self.redraw = true;
         let (x, y) = (event.column, event.row);

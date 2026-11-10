@@ -6,6 +6,12 @@ use serde::Deserialize;
 use std::io;
 
 /// Colours for nucleotide symbols, amino-acid classes and Phred-quality bins.
+///
+/// # Fields
+///
+/// - `nucleotides`: Case-insensitive nucleotide and ambiguity-symbol colours.
+/// - `amino_acids`: Colours indexed by the ten semantic residue classes used by amino_acid_color.
+/// - `quality`: Sorted inclusive Phred thresholds, always including zero.
 #[derive(Debug, Clone)]
 pub struct ContentPalette {
     /// Case-insensitive nucleotide and ambiguity-symbol colours.
@@ -46,6 +52,10 @@ impl Default for ContentPalette {
 
 impl ContentPalette {
     /// Resolve a nucleotide or ambiguity symbol through the shared case-insensitive palette.
+    ///
+    /// # Arguments
+    ///
+    /// - `base`: ASCII nucleotide or IUPAC ambiguity symbol, matched case-insensitively.
     pub fn nucleotide_color(&self, base: u8) -> Color {
         self.nucleotides.nucleotide_color(base)
     }
@@ -56,6 +66,10 @@ impl ContentPalette {
     }
 
     /// Map a residue, ambiguity code, stop or gap to its case-insensitive semantic class.
+    ///
+    /// # Arguments
+    ///
+    /// - `residue`: ASCII amino-acid, ambiguity, stop or gap symbol, matched case-insensitively.
     pub fn amino_acid_color(&self, residue: u8) -> Color {
         let index = match residue.to_ascii_uppercase() {
             b'A' | b'I' | b'L' | b'M' | b'V' => 0,
@@ -73,6 +87,10 @@ impl ContentPalette {
     }
 
     /// Choose the colour of the highest inclusive Phred threshold not exceeding the score.
+    ///
+    /// # Arguments
+    ///
+    /// - `score`: Numeric Phred score, after removing the Phred+33 ASCII offset.
     pub fn quality_color(&self, score: u8) -> Color {
         self.quality
             .iter()
@@ -83,6 +101,10 @@ impl ContentPalette {
     }
 
     /// Apply TOML overrides, validating colour names and unique Phred thresholds that include zero.
+    ///
+    /// # Arguments
+    ///
+    /// - `text`: TOML colour overrides to parse and apply to the palette.
     pub(crate) fn apply(&mut self, text: &str) -> io::Result<()> {
         let raw: RawContent = toml::from_str(text).map_err(|e| invalid(e.to_string()))?;
         self.nucleotides.apply(raw.nucleotides)?;
@@ -128,6 +150,12 @@ impl ContentPalette {
 }
 
 /// Deserialised optional colour overrides before semantic validation.
+///
+/// # Fields
+///
+/// - `nucleotides`: Named nucleotide colour overrides from TOML.
+/// - `amino_acids`: Semantic amino-acid class colour overrides from TOML.
+/// - `quality`: Replacement quality bins, absent when defaults should be retained.
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawContent {
@@ -139,6 +167,11 @@ struct RawContent {
     quality: Option<Vec<RawThreshold>>,
 }
 /// One inclusive minimum Phred score and its configured colour string.
+///
+/// # Fields
+///
+/// - `min`: Inclusive lower Phred boundary, validated in the range zero through 93.
+/// - `color`: Colour name or RGB representation to validate before applying the threshold.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawThreshold {
@@ -149,6 +182,10 @@ struct RawThreshold {
 }
 
 /// Wrap a palette validation failure as an invalid-data I/O error.
+///
+/// # Arguments
+///
+/// - `message`: Diagnostic message stored in the returned invalid-data error.
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }

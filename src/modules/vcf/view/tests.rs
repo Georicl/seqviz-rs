@@ -6,6 +6,13 @@ use ratatui::{Terminal, backend::TestBackend};
 use tempfile::TempDir;
 
 /// A fully indexed temporary VCF connected to a document view without a worker thread.
+///
+/// # Fields
+///
+/// - `_directory`: Temporary source/cache lifetime guard.
+/// - `dataset`: Fully indexed source used to answer view requests synchronously.
+/// - `view`: Document under test.
+/// - `first`: Original first record used to assert lossless copying.
 struct Fixture {
     /// Temporary source/cache lifetime guard.
     _directory: TempDir,
@@ -100,6 +107,10 @@ impl Fixture {
     }
 
     /// Send an unmodified key press through the document interface.
+    ///
+    /// # Arguments
+    ///
+    /// - `code`: Key code used to construct an unmodified keyboard event.
     fn key(&mut self, code: KeyCode) {
         self.view.key(KeyEvent::new(code, KeyModifiers::NONE));
     }
