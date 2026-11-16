@@ -1,5 +1,6 @@
 //! Messages distinguish a viewport refresh from a user operation.
 use super::data::{Format, Progress, RecordMeta, RecordSummary, SequenceWindow, Stats};
+use super::query::RecordQuery;
 use std::sync::{Arc, atomic::AtomicBool};
 
 /// Requested sequence and record-list windows, tagged with the current viewport generation.
@@ -9,9 +10,12 @@ use std::sync::{Arc, atomic::AtomicBool};
 /// - `token`: Only viewport snapshots use this generation. Resizing does not cancel operations.
 /// - `file`: Stable tab index whose dataset and view state the request addresses.
 /// - `record`: Zero-based selected record ID.
+/// - `position`: Selected position within the filtered, sorted result.
+/// - `anchor`: Whether to preserve the source record as indexing reorders results.
+/// - `query`: Record predicates and ordering applied by the data layer.
 /// - `start`: Zero-based sequence offset at which the requested window begins.
 /// - `count`: Requested number of sequence characters, capped by the backend.
-/// - `list_start`: Zero-based first record ID requested for the record list.
+/// - `list_start`: Zero-based first result position requested for the record list.
 /// - `list_count`: Requested number of visible record summaries, capped by the backend.
 #[derive(Clone, Debug)]
 pub struct ViewRequest {
@@ -21,11 +25,17 @@ pub struct ViewRequest {
     pub file: usize,
     /// Zero-based selected record ID.
     pub record: u64,
+    /// Position of the selected row in the filtered/sorted result, independent of the source ID.
+    pub position: u64,
+    /// Preserve `record` across incremental reordering; false selects `position` instead.
+    pub anchor: bool,
+    /// Record predicates and ordering applied by the data layer.
+    pub query: Box<RecordQuery>,
     /// Zero-based sequence offset at which the requested window begins.
     pub start: u64,
     /// Requested number of sequence characters, capped by the backend.
     pub count: usize,
-    /// Zero-based first record ID requested for the record list.
+    /// Zero-based first result position requested for the record list.
     pub list_start: u64,
     /// Requested number of visible record summaries, capped by the backend.
     pub list_count: usize,
@@ -40,6 +50,7 @@ pub struct ViewRequest {
 /// - `compression`: Source compression label shown in file details and status.
 /// - `file_size`: Read on the worker when the source is opened, never during rendering.
 /// - `records`: Indexed summaries for the requested record-list window.
+/// - `matching_records`: Number of currently indexed records matching the query.
 /// - `record`: Selected record metadata, absent if the scanner has not reached that record.
 /// - `window`: Available sequence and quality bytes beginning at the requested offset.
 /// - `progress`: Current scan progress, including recoverable and fatal error information.
@@ -57,6 +68,8 @@ pub struct Snapshot {
     pub file_size: Option<u64>,
     /// Indexed summaries for the requested record-list window.
     pub records: Vec<RecordSummary>,
+    /// Number of matching indexed records; this is provisional while scanning continues.
+    pub matching_records: u64,
     /// Selected record metadata, absent if the scanner has not reached that record.
     pub record: Option<RecordMeta>,
     /// Available sequence and quality bytes beginning at the requested offset.
@@ -74,11 +87,11 @@ pub struct Snapshot {
 /// # Variants
 ///
 /// - `View`: Replace the target viewport without cancelling operations in the same file and record.
-/// - `Search`: Search record names from an inclusive record ID, wrapping after scanning stops.
+/// - `Search`: Search filtered/sorted names from an inclusive result position, wrapping after scanning stops.
 ///   - `operation_id`: Monotonic operation identity used to reject stale requests and replies.
 ///   - `file`: Stable tab index associated with this command or result.
 ///   - `query`: Literal substring to find in indexed record names.
-///   - `after`: Inclusive zero-based starting record ID for the search.
+///   - `after`: Inclusive zero-based result position in the filtered, sorted list.
 ///   - `cancel`: Operation-owned flag shared with the foreground view; cancellation is permanent.
 /// - `Statistics`: Request cached/refreshed statistics and resume this tab's background scan.
 ///   - `file`: Stable tab index associated with this command or result.
@@ -94,14 +107,14 @@ pub struct Snapshot {
 pub enum Request {
     /// Replace the target viewport without cancelling operations in the same file and record.
     View(ViewRequest),
-    /// Search record names from an inclusive record ID, wrapping after scanning stops.
+    /// Search filtered/sorted record names from an inclusive result position, wrapping after scanning stops.
     ///
     /// # Fields
     ///
     /// - `operation_id`: Monotonic operation identity used to reject stale requests and replies.
     /// - `file`: Stable tab index associated with this command or result.
     /// - `query`: Literal substring to find in indexed record names.
-    /// - `after`: Inclusive zero-based starting record ID for the search.
+    /// - `after`: Inclusive zero-based result position in the filtered, sorted list.
     /// - `cancel`: Operation-owned flag shared with the foreground view; cancellation is permanent.
     Search {
         /// Monotonic operation identity used to reject stale requests and replies.
@@ -110,7 +123,7 @@ pub enum Request {
         file: usize,
         /// Literal substring to find in indexed record names.
         query: String,
-        /// Inclusive zero-based starting record ID for the search.
+        /// Inclusive zero-based starting position in the current query result.
         after: u64,
         /// Operation-owned flag shared with the foreground view; cancellation is permanent.
         cancel: Arc<AtomicBool>,

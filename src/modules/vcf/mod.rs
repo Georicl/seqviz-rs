@@ -13,8 +13,12 @@ pub mod model;
 pub mod palette;
 /// Define viewport, navigation and progress messages.
 pub(crate) mod protocol;
+/// Express record filters and deterministic ordering independently of the UI.
+pub mod query;
 /// Validate VCF headers and records while preserving original text.
 pub(crate) mod reader;
+/// Summarize indexed variants and genotype calls for the statistics panel.
+pub mod statistics;
 /// Manage the variant table and selected-record detail panels.
 pub(crate) mod view;
 

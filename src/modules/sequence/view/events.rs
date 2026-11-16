@@ -28,7 +28,10 @@ impl SequenceView {
                     self.send(Request::Cancel(self.file));
                     self.page = None;
                     self.info.selection = None;
-                    self.dirty = true;
+                    if let Some(snapshot) = self.document.snapshot.as_mut() {
+                        snapshot.paused = true;
+                    }
+                    self.dirty = false;
                 }
                 KeyCode::Tab | KeyCode::Right => self.open_page(page.next(false)),
                 KeyCode::BackTab | KeyCode::Left => self.open_page(page.next(true)),
@@ -67,6 +70,8 @@ impl SequenceView {
             KeyCode::F(4) => self.open_page(Page::Statistics),
             KeyCode::Char('/') => self.input = Some(Input::Search(String::new())),
             KeyCode::Char(':') => self.input = Some(Input::Position(String::new())),
+            KeyCode::Char('f') => self.input = Some(Input::Filter(self.tab().filter_text.clone())),
+            KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('n') => {
                 if !self.tab().last_search.is_empty() {
                     self.request_view();
@@ -76,7 +81,7 @@ impl SequenceView {
                         cancel,
                         file: self.file,
                         query: self.tab().last_search.clone(),
-                        after: self.tab().record + 1,
+                        after: self.tab().position + 1,
                     });
                     self.tab_mut().message = "Searching… Esc cancels".into();
                 }
@@ -89,8 +94,8 @@ impl SequenceView {
                 self.focus = Focus::Sequence
             }
             KeyCode::Left if self.focus == Focus::Records => {}
-            KeyCode::Char('[') => self.choose_record(self.tab().record.saturating_sub(1)),
-            KeyCode::Char(']') => self.choose_record(self.tab().record + 1),
+            KeyCode::Char('[') => self.choose_record(self.tab().position.saturating_sub(1)),
+            KeyCode::Char(']') => self.choose_record(self.tab().position + 1),
             KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.focus = Focus::Records
             }
@@ -130,7 +135,10 @@ impl SequenceView {
                 self.tab_mut().selection = None;
                 self.tab_mut().pending_end = false;
                 self.drag = None;
-                self.dirty = true;
+                if let Some(snapshot) = self.document.snapshot.as_mut() {
+                    snapshot.paused = true;
+                }
+                self.dirty = false;
             }
             _ => {}
         }
@@ -177,10 +185,13 @@ impl SequenceView {
                     }
                     _ => self.tab_mut().message = "Enter a 1-based sequence position".into(),
                 },
+                Input::Filter(text) => self.apply_filter(text),
                 _ => {}
             },
             _ => {
-                if let Some(Input::Search(text) | Input::Position(text)) = self.input.as_mut() {
+                if let Some(Input::Search(text) | Input::Position(text) | Input::Filter(text)) =
+                    self.input.as_mut()
+                {
                     crate::widgets::input::edit(text, key);
                 }
             }
@@ -194,7 +205,7 @@ impl SequenceView {
     /// - `delta`: Signed number of record-list rows or displayed sequence rows to move.
     pub(crate) fn move_vertical(&mut self, delta: i64) {
         if self.focus == Focus::Records {
-            self.choose_record(self.tab().record.saturating_add_signed(delta));
+            self.choose_record(self.tab().position.saturating_add_signed(delta));
         } else {
             self.move_cursor(delta * self.hits.bases_per_line.max(1) as i64);
         }
@@ -237,7 +248,7 @@ impl SequenceView {
         if self.focus == Focus::Records {
             self.choose_record(
                 self.tab()
-                    .record
+                    .position
                     .saturating_add_signed(delta * self.hits.list.height.max(1) as i64),
             );
         } else {
@@ -258,7 +269,7 @@ impl SequenceView {
     pub(crate) fn end(&mut self) {
         if let Some(snapshot) = &self.tab().snapshot {
             if self.focus == Focus::Records && snapshot.progress.complete {
-                self.choose_record(snapshot.progress.records.saturating_sub(1));
+                self.choose_record(snapshot.matching_records.saturating_sub(1));
                 return;
             }
             if self.focus == Focus::Sequence
@@ -341,12 +352,10 @@ impl SequenceView {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if contains(self.hits.list, x, y) {
-                    if self
-                        .tab()
-                        .snapshot
-                        .as_ref()
-                        .is_none_or(|s| s.request.list_start != self.tab().list_start)
-                    {
+                    if self.tab().snapshot.as_ref().is_none_or(|s| {
+                        s.request.list_start != self.tab().list_start
+                            || s.request.query.as_ref() != &self.tab().query
+                    }) {
                         return;
                     }
                     self.focus = Focus::Records;

@@ -1,13 +1,27 @@
 //! One VCF document: variant navigation and lazily materialized detail pages.
+/// Commit record queries and invalidate their previous viewport state.
+mod controls;
 /// Translate keyboard and pointer input into VCF navigation and selection changes.
 mod events;
 /// Allocate terminal rectangles for the table and detail panels.
 mod layout;
+/// Check query controls, stale replies and explicit statistics lifetimes.
+#[cfg(test)]
+mod query_tests;
 /// Draw bounded table cells, original-text details and overlays.
 mod render;
 /// Check terminal-cell output across narrow layouts and Unicode content.
 #[cfg(test)]
 mod render_tests;
+/// Map sample preferences to document rows, headings and clipboard text.
+mod sample_controls;
+/// Track sample selection and displayed FORMAT fields independently of record data.
+mod samples;
+/// Verify sample controls through the real document interface and clipboard actions.
+#[cfg(test)]
+mod samples_tests;
+/// Own explicit statistics requests separately from viewport refresh generations.
+mod statistics_controls;
 /// Exercise document navigation, clipboard actions and asynchronous update handling.
 #[cfg(test)]
 mod tests;
@@ -18,6 +32,8 @@ use super::{
     config::VcfConfig,
     model::VcfEntry,
     protocol::{Request, Snapshot, Update, ViewRequest},
+    query::Query,
+    statistics::Statistics,
 };
 use crate::modules::{
     protocol::{ModuleRequest, ModuleUpdate},
@@ -25,6 +41,7 @@ use crate::modules::{
 };
 use crate::widgets::{text_panel, theme::Theme};
 use ratatui::{Frame, layout::Rect};
+use samples::SampleNavigation;
 use std::{
     path::PathBuf,
     sync::{
@@ -95,29 +112,40 @@ enum Overlay {
     File,
     /// Original header metadata displayed as reflowed text.
     Header,
+    /// Statistics over the currently indexed records matching the active query.
+    Statistics,
 }
-/// Editable text for a position jump or contig search.
+/// Uncommitted text for navigation, record predicates or displayed FORMAT fields.
 ///
 /// # Variants
 ///
 /// - `Position`: Editable positive VCF position to locate.
 /// - `Contig`: Search text used to filter the contig picker.
+/// - `Filter`: Editable record filter and sort expression.
+/// - `Sample`: Sample name search text.
+/// - `Fields`: Comma-separated FORMAT fields to display.
 enum Input {
     /// Editable positive VCF position to locate.
     Position(String),
     /// Search text used to filter the contig picker.
     Contig(String),
+    /// Record filter expression, committed only after validation.
+    Filter(String),
+    /// Sample name to find in the current sample list.
+    Sample(String),
+    /// Comma-separated FORMAT fields to display.
+    Fields(String),
 }
-/// A clipboard operation identity and its shared cancellation flag.
+/// Identity and cancellation state for a background operation owned by this page.
 ///
 /// # Fields
 ///
-/// - `id`: Application-wide clipboard operation ID.
-/// - `cancel`: Flag shared with the clipboard service to stop obsolete work.
-struct CopyOperation {
-    /// Application-wide clipboard operation ID.
+/// - `id`: Application-wide identity shared by clipboard and statistics operations.
+/// - `cancel`: Flag shared with the owning service to stop obsolete work.
+struct PendingOperation {
+    /// Application-wide identity shared by clipboard and statistics operations.
     id: u64,
-    /// Flag shared with the clipboard service to stop obsolete work.
+    /// Flag shared with the owning background service to stop obsolete work.
     cancel: Arc<AtomicBool>,
 }
 
@@ -130,12 +158,20 @@ struct CopyOperation {
 /// - `file`: Tab index attached to all requests and clipboard operations.
 /// - `config`: VCF layout and semantic colour settings.
 /// - `theme`: Application-wide UI colours.
-/// - `clock`: Shared monotonic ID source for clipboard operations.
+/// - `clock`: Shared monotonic ID source for clipboard and statistics operations.
 /// - `enabled`: Whether this tab is active and may accept request-bound updates.
 /// - `snapshot`: Most recently accepted backend viewport and selected record.
 /// - `load_error`: Initial backend error retained separately from transient status messages.
 /// - `contig`: Current contig filter; None displays all source records.
+/// - `query`: Validated record predicates and ordering sent to the backend.
+/// - `filter_text`: Last successfully applied filter expression.
+/// - `samples`: Sample navigation and FORMAT column preferences.
+/// - `sample_query`: Last sample name query used by the next-match command.
+/// - `statistics`: Statistics returned for the last explicit request.
+/// - `statistics_error`: Error returned by the current statistics request.
+/// - `pending_statistics`: Independent identity and cancellation state for the report.
 /// - `selected`: Zero-based selected record ordinal within the active filter.
+/// - `anchor`: Stable source record retained across incremental reordering.
 /// - `start`: Zero-based first visible table ordinal within the active filter.
 /// - `token`: Current viewport or position-lookup generation.
 /// - `locating`: Token of an outstanding position lookup that suppresses normal viewport requests.
@@ -147,8 +183,8 @@ struct CopyOperation {
 /// - `selection`: Inclusive selection endpoints as logical row and original character indices.
 /// - `dragging`: Whether a left-button text-selection drag is active.
 /// - `drag_anchor`: Initial logical text position of the current drag.
-/// - `overlay`: Active help, file-information or header panel.
-/// - `input`: Current position-jump or contig-search editor.
+/// - `overlay`: Active help, file-information, header or statistics panel.
+/// - `input`: Current navigation, filter, sample-search or FORMAT-field editor.
 /// - `picker_row`: Selected index in the filtered contig choices.
 /// - `info`: Reflowed overlay text, scroll position and selection.
 /// - `layout`: Prepared rectangles shared by rendering and event handling.
@@ -166,7 +202,7 @@ pub(crate) struct VcfView {
     config: VcfConfig,
     /// Application-wide UI colours.
     theme: Theme,
-    /// Shared monotonic ID source for clipboard operations.
+    /// Shared monotonic ID source for clipboard and statistics operations.
     clock: Arc<AtomicU64>,
     /// Whether this tab is active and may accept request-bound updates.
     enabled: bool,
@@ -176,8 +212,24 @@ pub(crate) struct VcfView {
     load_error: Option<String>,
     /// Current contig filter; None displays all source records.
     contig: Option<String>,
+    /// Validated record predicates and ordering sent to the domain backend.
+    query: Query,
+    /// Last successfully applied filter expression, ready for editing.
+    filter_text: String,
+    /// Sample navigation and column preferences retained across variants.
+    samples: SampleNavigation,
+    /// Last sample name query, reused by the next-match command.
+    sample_query: String,
+    /// Statistics for the last explicit request in this query scope.
+    statistics: Option<Statistics>,
+    /// Error returned by the current statistics request.
+    statistics_error: Option<String>,
+    /// Independent operation identity so resizing does not invalidate statistics.
+    pending_statistics: Option<PendingOperation>,
     /// Zero-based selected record ordinal within the active filter.
     selected: u64,
+    /// Stable source record retained while indexing changes sorted result positions.
+    anchor: Option<u64>,
     /// Zero-based first visible table ordinal within the active filter.
     start: u64,
     /// Current viewport or position-lookup generation.
@@ -217,7 +269,7 @@ pub(crate) struct VcfView {
     /// Transient status or current error text.
     message: String,
     /// Current clipboard job whose completion may be accepted.
-    pending_copy: Option<CopyOperation>,
+    pending_copy: Option<PendingOperation>,
     /// Requests and application-level actions waiting to be drained.
     actions: Vec<Action>,
 }
@@ -249,7 +301,15 @@ impl VcfView {
             snapshot: None,
             load_error: None,
             contig: None,
+            query: Query::default(),
+            filter_text: String::new(),
+            samples: SampleNavigation::default(),
+            sample_query: String::new(),
+            statistics: None,
+            statistics_error: None,
+            pending_statistics: None,
             selected: 0,
+            anchor: None,
             start: 0,
             token: 0,
             locating: None,
@@ -285,7 +345,10 @@ impl VcfView {
     /// Borrow the selected record only when its snapshot matches the current filter and ordinal.
     fn entry(&self) -> Option<&VcfEntry> {
         let snapshot = self.snapshot.as_ref()?;
-        if snapshot.request.selected != self.selected || snapshot.request.contig != self.contig {
+        if snapshot.request.selected != self.selected
+            || snapshot.request.contig != self.contig
+            || snapshot.request.query != self.query
+        {
             return None;
         }
         snapshot.selected.as_deref()
@@ -310,7 +373,7 @@ impl VcfView {
         }
         let id = self.clock.fetch_add(1, Ordering::Relaxed) + 1;
         let cancel = Arc::new(AtomicBool::new(false));
-        self.pending_copy = Some(CopyOperation {
+        self.pending_copy = Some(PendingOperation {
             id,
             cancel: Arc::clone(&cancel),
         });
@@ -331,20 +394,21 @@ impl VcfView {
     /// - `selected`: Zero-based record ordinal within the active contig filter.
     fn change_record(&mut self, selected: u64) {
         self.locating = None;
+        self.token += 1;
+        self.anchor = None;
         let selected = self
             .snapshot
             .as_ref()
-            .filter(|s| s.progress.complete && s.request.contig == self.contig)
+            .filter(|s| {
+                s.progress.complete
+                    && s.request.contig == self.contig
+                    && s.request.query == self.query
+            })
             .map_or(selected, |s| selected.min(s.total.saturating_sub(1)));
         if selected != self.selected {
             self.cancel_copy();
             self.selected = selected;
-            self.detail_row = 0;
-            self.detail_start = 0;
-            self.horizontal = 0;
-            self.selection = None;
-            self.dragging = false;
-            self.drag_anchor = None;
+            self.reset_detail_position();
         }
         let count = self.layout.rows.height.max(1) as u64;
         if self.selected < self.start {
@@ -364,13 +428,7 @@ impl VcfView {
     fn change_detail(&mut self, detail: Detail) {
         self.cancel_copy();
         self.detail = detail;
-        self.detail_row = 0;
-        self.detail_start = 0;
-        self.horizontal = 0;
-        self.selection = None;
-        self.dragging = false;
-        self.drag_anchor = None;
-        self.redraw = true;
+        self.reset_detail_position();
     }
     /// Count rows in the active INFO, sample or raw-record detail page.
     fn detail_len(&self) -> usize {
@@ -379,7 +437,10 @@ impl VcfView {
         };
         match self.detail {
             Detail::Info => entry.record.info_fields().len(),
-            Detail::Samples => self.snapshot.as_ref().map_or(0, |s| s.header.samples.len()),
+            Detail::Samples => self
+                .snapshot
+                .as_ref()
+                .map_or(0, |s| self.samples.len(s.header.samples.len())),
             Detail::Raw => 1,
         }
     }
@@ -408,18 +469,7 @@ impl VcfView {
                     }
                 })
                 .collect(),
-            Detail::Samples => {
-                let samples = &self.snapshot.as_ref().unwrap().header.samples;
-                entry
-                    .record
-                    .sample_values(start, count)
-                    .into_iter()
-                    .map(|sample| {
-                        let name = samples.get(sample.index).map(String::as_str).unwrap_or(".");
-                        format!("{name}\t{}", sample.values.join("\t"))
-                    })
-                    .collect()
-            }
+            Detail::Samples => self.sample_rows(start, count),
             Detail::Raw if start == 0 && count > 0 => vec![entry.record.raw.clone()],
             Detail::Raw => Vec::new(),
         }
@@ -447,6 +497,7 @@ impl VcfView {
         let Some(entry) = self.entry() else {
             self.message = if self.snapshot.as_ref().is_some_and(|snapshot| {
                 snapshot.request.contig == self.contig
+                    && snapshot.request.query == self.query
                     && snapshot.progress.complete
                     && snapshot.total == 0
             }) {
@@ -504,7 +555,7 @@ impl VcfView {
                     })
                     .unwrap_or_default(),
                 Detail::Samples => {
-                    let header = format!("SAMPLE\t{}", entry.record.format.join("\t"));
+                    let header = self.sample_heading();
                     self.detail_rows(self.detail_row, 1)
                         .first()
                         .map(|line| format!("{header}\n{line}"))
@@ -583,10 +634,14 @@ impl VcfView {
     /// - `overlay`: Informational overlay to open.
     fn open_overlay(&mut self, overlay: Overlay) {
         self.cancel_copy();
+        self.cancel_statistics();
         self.dragging = false;
         self.drag_anchor = None;
         self.overlay = Some(overlay);
         self.info = text_panel::State::default();
+        if overlay == Overlay::Statistics {
+            self.request_statistics();
+        }
         self.redraw = true;
         self.refresh_overlay();
     }
@@ -609,6 +664,19 @@ impl VcfView {
                 "Y          Copy original VCF header + selected raw record".into(),
                 "m / F3     Original header and metadata".into(),
                 "F2         File information".into(),
+                "f          Filter records; empty input clears the filter".into(),
+                "s          Cycle source / position / QUAL / type ordering".into(),
+                "F4         Statistics for the current record filter; press again to refresh"
+                    .into(),
+                "/ / n      Find sample by name / next match".into(),
+                "p / P      Pin current sample / show only pinned samples".into(),
+                "           Pinned sample names are underlined".into(),
+                "F          Choose FORMAT fields, e.g. GT,DP; empty shows all".into(),
+                "".into(),
+                "FILTER EXAMPLES (space-separated conditions)".into(),
+                "pass qual>=30 type=SNV".into(),
+                "contig=chr1 start=100 end=200 sort=-qual".into(),
+                "id=rs123; sort=source, pos, qual or type (- reverses)".into(),
                 "Tab        Switch file; q quits outside this panel".into(),
                 "Mouse      Select variant, detail tab, or detail text".into(),
                 "".into(),
@@ -631,6 +699,7 @@ impl VcfView {
                 }
                 lines
             }
+            Overlay::Statistics => self.statistics_lines(),
             Overlay::Header => self
                 .snapshot
                 .as_ref()
@@ -671,7 +740,9 @@ impl VcfView {
             file: self.file,
             token: self.token,
             contig: self.contig.clone(),
+            query: self.query.clone(),
             selected: self.selected,
+            anchor: self.anchor,
             start: self.start,
             count: self.layout.rows.height.max(1) as usize,
         }));
@@ -786,6 +857,9 @@ impl DocumentView for VcfView {
                     && snapshot.request.file == self.file
                     && snapshot.request.token == self.token =>
             {
+                self.selected = snapshot.request.selected;
+                self.start = snapshot.request.start;
+                self.anchor = snapshot.request.anchor;
                 if snapshot.total > 0
                     && self.selected >= snapshot.total
                     && snapshot.progress.complete
@@ -833,6 +907,7 @@ impl DocumentView for VcfView {
             {
                 self.locating = None;
                 self.selected = 0;
+                self.anchor = None;
                 self.start = 0;
                 self.detail_row = 0;
                 self.detail_start = 0;
@@ -846,6 +921,23 @@ impl DocumentView for VcfView {
                     self.load_error = Some(text.clone());
                 }
                 self.message = text;
+                self.redraw = true;
+            }
+            Update::Statistics {
+                file,
+                token,
+                statistics,
+            } if self.accepts_statistics(file, token) => {
+                self.statistics = Some(statistics);
+                self.statistics_error = None;
+                self.refresh_overlay();
+                self.redraw = true;
+            }
+            Update::StatisticsFailed { file, token, text }
+                if self.accepts_statistics(file, token) =>
+            {
+                self.statistics_error = Some(text);
+                self.refresh_overlay();
                 self.redraw = true;
             }
             _ => {}
@@ -865,6 +957,7 @@ impl DocumentView for VcfView {
     /// Cancel transient selection, input, lookup and clipboard state when leaving this tab.
     fn deactivate(&mut self) {
         self.cancel_copy();
+        self.cancel_statistics();
         self.locating = None;
         self.enabled = false;
         self.input = None;
@@ -897,7 +990,7 @@ impl DocumentView for VcfView {
         } else {
             "Opening…".into()
         };
-        Status { message, hints: "? help  c contig  : position  Enter details  1/2/3 detail tab  y copy  Tab file  q quit".into() }
+        Status { message, hints: "? help  f filter  s sort  F4 stats  / sample  p/P pin  F fields  y copy  Tab file  q quit".into() }
     }
     /// Expose the current position or contig editor to the application prompt widget.
     fn input_prompt(&self) -> Option<InputPrompt<'_>> {
@@ -908,6 +1001,18 @@ impl DocumentView for VcfView {
             }),
             Some(Input::Contig(text)) => Some(InputPrompt {
                 label: "Contig: ",
+                text,
+            }),
+            Some(Input::Filter(text)) => Some(InputPrompt {
+                label: "Filter (pass qual>=30 type=SNV; empty clears): ",
+                text,
+            }),
+            Some(Input::Sample(text)) => Some(InputPrompt {
+                label: "Find sample name: ",
+                text,
+            }),
+            Some(Input::Fields(text)) => Some(InputPrompt {
+                label: "FORMAT fields (GT,DP; empty shows all): ",
                 text,
             }),
             None => None,

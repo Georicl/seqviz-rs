@@ -17,13 +17,21 @@ use std::{
     },
 };
 
-/// Wrap a SQLite error in the I/O error type exposed by the data layer.
+/// Keep SQLite cancellation distinguishable from storage failures at the data boundary.
 ///
 /// # Arguments
 ///
 /// - `error`: SQLite error to expose through the data layer as an I/O error.
-fn sql(error: rusqlite::Error) -> io::Error {
-    io::Error::other(error)
+pub(super) fn sql(error: rusqlite::Error) -> io::Error {
+    let interrupted = matches!(&error, rusqlite::Error::SqliteFailure(code, _) if code.code == rusqlite::ErrorCode::OperationInterrupted);
+    io::Error::new(
+        if interrupted {
+            io::ErrorKind::Interrupted
+        } else {
+            io::ErrorKind::Other
+        },
+        error,
+    )
 }
 
 /// SQLite-backed record and span storage with incremental metadata and statistics.
@@ -492,7 +500,7 @@ impl RecordIndex {
                 }
             }
         }
-        Ok(Stats {
+        let mut stats = Stats {
             records: self.progress.records,
             sequence_records: count,
             total_length: total,
@@ -504,7 +512,10 @@ impl RecordIndex {
             protein: protein > 0 && protein == count,
             complete: self.progress.complete && self.progress.errors == 0,
             errors: self.progress.errors,
-        })
+            ..Stats::default()
+        };
+        super::statistics::extend(self, &mut stats)?;
+        Ok(stats)
     }
 
     /// Insert or replace one persisted scan-state value.
