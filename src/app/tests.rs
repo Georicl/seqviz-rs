@@ -4,6 +4,11 @@ use super::{config::Config, state::App};
 use crate::modules::session::Worker;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// Create an application with a temporary cache and wait for its first document.
+///
+/// # Arguments
+///
+/// - `paths`: Input file paths in command-line order.
+/// - `cache`: Directory for reusable record indexes and source checkpoints.
 fn app(paths: Vec<std::path::PathBuf>, cache: &std::path::Path) -> App {
     let worker = Worker::start(paths.clone(), cache.into());
     let mut app = App::new(paths, Config::default(), worker);
@@ -11,6 +16,10 @@ fn app(paths: Vec<std::path::PathBuf>, cache: &std::path::Path) -> App {
     app
 }
 /// Drive layout and background replies until the active fixture becomes copyable.
+///
+/// # Arguments
+///
+/// - `app`: Application state containing the active document and global interface settings.
 fn wait_ready(app: &mut App) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     app.prepare_frame(ratatui::layout::Rect::new(0, 0, 100, 30));

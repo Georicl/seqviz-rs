@@ -13,6 +13,15 @@ use std::{
 };
 
 /// Decoded record captured by the parser-only test sink.
+///
+/// # Fields
+///
+/// - `header`: Defline or read name delivered by the scanner.
+/// - `plus`: Complete FASTQ separator delivered by the scanner.
+/// - `sequence`: Decoded sequence symbols collected across spans.
+/// - `quality`: Decoded Phred+33 quality bytes collected across spans.
+/// - `fields`: Ordered record metadata most recently supplied by the scanner.
+/// - `has_sequence`: Whether the scanner reported sequence as present.
 #[derive(Default, Debug, PartialEq, Eq)]
 struct ParsedRecord {
     /// Defline or read name delivered by the scanner.
@@ -30,6 +39,15 @@ struct ParsedRecord {
 }
 
 /// In-memory record sink that exposes parser output and restart boundaries to assertions.
+///
+/// # Fields
+///
+/// - `current`: Partial record receiving scanner events.
+/// - `records`: Records completed in source order.
+/// - `errors`: Recoverable parser errors with logical-byte offsets.
+/// - `references`: BAM reference IDs mapped to their names.
+/// - `resume`: Most recently reported safe logical-byte restart offset.
+/// - `header_end`: Logical-byte end of a completed BAM header.
 #[derive(Default)]
 struct Collector {
     /// Partial record receiving scanner events.
@@ -55,6 +73,12 @@ impl RecordSink for Collector {
         })
     }
     /// Start an empty collected record and assert the preceding record was closed.
+    ///
+    /// # Arguments
+    ///
+    /// - `header`: Full record defline or read name, without the leading FASTA or FASTQ marker.
+    /// - `has_sequence`: Whether this record contains a sequence, independently of its current
+    ///   indexed length.
     fn begin_record(&mut self, header: String, has_sequence: bool) -> io::Result<()> {
         assert!(self.current.is_none(), "Previous record must have ended");
         self.current = Some(ParsedRecord {
@@ -65,11 +89,19 @@ impl RecordSink for Collector {
         Ok(())
     }
     /// Keep the FASTQ separator exactly as delivered by the scanner.
+    ///
+    /// # Arguments
+    ///
+    /// - `plus`: Complete FASTQ separator line, including its leading `+`.
     fn set_plus(&mut self, plus: String) -> io::Result<()> {
         self.current.as_mut().unwrap().plus = plus;
         Ok(())
     }
     /// Replace the collected metadata with the scanner's ordered fields.
+    ///
+    /// # Arguments
+    ///
+    /// - `fields`: Ordered name/value metadata fields for the current record.
     fn set_fields(&mut self, fields: &[(String, String)]) -> io::Result<()> {
         self.current.as_mut().unwrap().fields = fields.to_vec();
         Ok(())
@@ -79,6 +111,15 @@ impl RecordSink for Collector {
         self.current.as_mut().unwrap().has_sequence = false;
     }
     /// Collect decoded sequence or quality bytes without storing source spans.
+    ///
+    /// # Arguments
+    ///
+    /// - `_raw`: Original source bytes before sequence or quality decoding.
+    /// - `_offset`: Zero-based byte offset in the logical, decompressed source stream.
+    /// - `kind`: Whether the source span contains sequence symbols or quality scores.
+    /// - `_encoding`: Decoder used to turn stored source spans into sequence or quality symbols.
+    /// - `decoded`: Decoded sequence symbols or Phred+33 quality bytes corresponding to the source
+    ///   fragment.
     fn append(
         &mut self,
         _raw: &[u8],
@@ -103,6 +144,10 @@ impl RecordSink for Collector {
         Ok(())
     }
     /// Move the assembled record into the completed list and retain the resume offset.
+    ///
+    /// # Arguments
+    ///
+    /// - `next_offset`: Logical source-byte boundary from which a later scan can safely resume.
     fn end_record(&mut self, next_offset: u64) -> io::Result<()> {
         self.records.push(self.current.take().unwrap());
         self.resume = next_offset;
@@ -114,11 +159,20 @@ impl RecordSink for Collector {
         Ok(())
     }
     /// Collect an error message together with its logical-byte offset.
+    ///
+    /// # Arguments
+    ///
+    /// - `offset`: Zero-based byte offset in the logical, decompressed source stream.
+    /// - `message`: Diagnostic message recorded at the given source offset.
     fn log_error(&mut self, offset: u64, message: &str) -> io::Result<()> {
         self.errors.push((offset, message.to_owned()));
         Ok(())
     }
     /// Retain the parser's latest safe restart boundary.
+    ///
+    /// # Arguments
+    ///
+    /// - `offset`: Zero-based byte offset in the logical, decompressed source stream.
     fn set_resume(&mut self, offset: u64) -> io::Result<()> {
         self.resume = offset;
         Ok(())
@@ -129,11 +183,21 @@ impl RecordSink for Collector {
         Ok(())
     }
     /// Remember the BAM reference name associated with a header ID.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Zero-based reference ID from the BAM header.
+    /// - `name`: Reference sequence name from the BAM header.
+    /// - `_length`: Reference length supplied by the scanner, unused by this test collector.
     fn add_reference(&mut self, id: i32, name: &str, _length: u64) -> io::Result<()> {
         self.references.insert(id, name.to_owned());
         Ok(())
     }
     /// Look up a collected reference or return `*` for the missing reference ID.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: BAM reference ID to resolve, with `-1` denoting a missing reference.
     fn reference_name(&self, id: i32) -> io::Result<String> {
         if id == -1 {
             return Ok("*".into());
@@ -144,6 +208,10 @@ impl RecordSink for Collector {
             .ok_or_else(|| invalid("Unknown reference"))
     }
     /// Record the completed BAM-header boundary as the current resume position.
+    ///
+    /// # Arguments
+    ///
+    /// - `offset`: Logical source-byte offset of the first BAM alignment after the header.
     fn finish_header(&mut self, offset: u64) -> io::Result<()> {
         self.header_end = Some(offset);
         self.resume = offset;
@@ -152,6 +220,12 @@ impl RecordSink for Collector {
 }
 
 /// Scan in-memory text to completion and assert that every call respects its byte budget.
+///
+/// # Arguments
+///
+/// - `bytes`: In-memory text fixture to feed to the incremental scanner.
+/// - `format`: Sequence or alignment format that determines how input bytes are parsed.
+/// - `budget`: Maximum number of logical source bytes to consume in this scan step.
 fn scan_text(bytes: &[u8], format: Format, budget: usize) -> io::Result<Collector> {
     let mut cursor = Cursor::new(bytes);
     let mut position = 0;

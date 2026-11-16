@@ -7,6 +7,15 @@ use super::{
 };
 
 /// Incremental text-record parser with state that survives split lines and bounded scan calls.
+///
+/// # Fields
+///
+/// - `format`: Text format whose parsing rules are active.
+/// - `line_start`: Whether the next fragment begins at a new source line.
+/// - `phase`: Current FASTA or FASTQ section.
+/// - `text`: Header or separator text accumulated across fragments.
+/// - `comment`: Whether the current FASTA comment continues into the next fragment.
+/// - `sam`: SAM-specific field and row state.
 pub(super) struct TextScanner {
     /// Text format whose parsing rules are active.
     format: Format,
@@ -23,6 +32,14 @@ pub(super) struct TextScanner {
 }
 
 /// Current FASTA or FASTQ record section; `Start` waits for the next record.
+///
+/// # Variants
+///
+/// - `Header`: Collect a defline without its format marker.
+/// - `Sequence`: Stream sequence bytes into the record sink.
+/// - `Plus`: Collect a FASTQ separator line including its `+` marker.
+/// - `Quality`: Stream FASTQ qualities until sequence and quality lengths match.
+/// - `Start`: Wait for the next FASTQ header or the first FASTA content.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
     /// Collect a defline without its format marker.
@@ -38,6 +55,17 @@ enum Phase {
 }
 
 /// State of the current SAM row, including partial fields and recoverable errors.
+///
+/// # Fields
+///
+/// - `field`: Zero-based field number within the current SAM row.
+/// - `token`: Partial non-sequence field accumulated across fragments.
+/// - `fields`: First nine mandatory fields used to validate core metadata.
+/// - `aux`: Parsed optional fields for the current row.
+/// - `header`: Whether this row is a SAM header line.
+/// - `bad`: Whether this row has failed validation and must be skipped.
+/// - `sequence_star`: Whether SEQ has been marked missing by a standalone `*`.
+/// - `quality_star`: A pending `*` that may be a missing QUAL marker or a quality character.
 #[derive(Default)]
 struct Sam {
     /// Zero-based field number within the current SAM row.
@@ -60,6 +88,10 @@ struct Sam {
 
 impl TextScanner {
     /// Create a FASTA, FASTQ or SAM scanner positioned at the start of a record.
+    ///
+    /// # Arguments
+    ///
+    /// - `format`: Sequence or alignment format that determines how input bytes are parsed.
     pub fn new(format: Format) -> Self {
         Self {
             format,
@@ -73,6 +105,12 @@ impl TextScanner {
 
     /// Consume at most `budget` logical bytes while retaining split-line and record state.
     /// Return `true` after validating and closing the final record at end of input.
+    ///
+    /// # Arguments
+    ///
+    /// - `input`: Buffered source from which the next logical input bytes are consumed.
+    /// - `records`: Sink receiving parsed record metadata, decoded spans and scan boundaries.
+    /// - `budget`: Maximum number of logical source bytes to consume in this scan step.
     pub fn step<R: BufRead>(
         &mut self,
         input: &mut ScanInput<'_, R>,
@@ -108,6 +146,13 @@ impl TextScanner {
     }
 
     /// Process a FASTA line fragment, excluding comments from spans and closing records at deflines.
+    ///
+    /// # Arguments
+    ///
+    /// - `records`: Sink receiving parsed record metadata, decoded spans and scan boundaries.
+    /// - `bytes`: Fragment of a decoded text line, possibly ending within a record.
+    /// - `offset`: Zero-based byte offset in the logical, decompressed source stream.
+    /// - `end`: Whether this fragment ends at a newline.
     fn fasta(
         &mut self,
         records: &mut impl RecordSink,
@@ -158,6 +203,13 @@ impl TextScanner {
 
     /// Advance the wrapped FASTQ header, sequence, separator and quality phases.
     /// Quality length determines record completion, so `@` and `+` remain valid quality bytes.
+    ///
+    /// # Arguments
+    ///
+    /// - `records`: Sink receiving parsed record metadata, decoded spans and scan boundaries.
+    /// - `bytes`: Fragment of a decoded text line, possibly ending within a record.
+    /// - `offset`: Zero-based byte offset in the logical, decompressed source stream.
+    /// - `end`: Whether this fragment ends at a newline.
     fn fastq(
         &mut self,
         records: &mut impl RecordSink,
@@ -234,6 +286,12 @@ impl TextScanner {
     }
 
     /// Split SAM fragments at tabs and newlines, recovering from invalid data at the next row.
+    ///
+    /// # Arguments
+    ///
+    /// - `records`: Sink receiving parsed record metadata, decoded spans and scan boundaries.
+    /// - `bytes`: Fragment of a decoded text line, possibly ending within a record.
+    /// - `offset`: Zero-based byte offset in the logical, decompressed source stream.
     fn sam(&mut self, records: &mut impl RecordSink, bytes: &[u8], offset: u64) -> io::Result<()> {
         let mut begin = 0;
         for (i, byte) in bytes.iter().enumerate() {
@@ -280,6 +338,12 @@ impl TextScanner {
     }
 
     /// Stream a SAM field fragment, retaining missing-value markers across chunk boundaries.
+    ///
+    /// # Arguments
+    ///
+    /// - `records`: Sink receiving parsed record metadata, decoded spans and scan boundaries.
+    /// - `part`: Source-byte fragment belonging to the current SAM field.
+    /// - `offset`: Zero-based byte offset in the logical, decompressed source stream.
     fn sam_part(
         &mut self,
         records: &mut impl RecordSink,
@@ -338,6 +402,11 @@ impl TextScanner {
     }
 
     /// Validate a completed SAM field and assemble metadata before accepting the row.
+    ///
+    /// # Arguments
+    ///
+    /// - `records`: Sink receiving parsed record metadata, decoded spans and scan boundaries.
+    /// - `end_line`: Whether the fragment completes the current input line.
     fn sam_field(&mut self, records: &mut impl RecordSink, end_line: bool) -> io::Result<()> {
         if self.sam.bad || self.sam.header {
             return Ok(());
@@ -400,6 +469,11 @@ impl TextScanner {
     }
 
     /// Validate end-of-input state and complete the final record even without a trailing newline.
+    ///
+    /// # Arguments
+    ///
+    /// - `records`: Sink receiving parsed record metadata, decoded spans and scan boundaries.
+    /// - `position`: Logical source-byte position at end of input.
     fn finish(&mut self, records: &mut impl RecordSink, position: u64) -> io::Result<bool> {
         match self.format {
             Format::Fasta => {
@@ -448,12 +522,21 @@ impl TextScanner {
 }
 
 /// Decode UTF-8 header text and remove only trailing CR and LF characters.
+///
+/// # Arguments
+///
+/// - `bytes`: Header bytes to decode, including any trailing CR or LF.
 fn defline(bytes: &[u8]) -> io::Result<String> {
     let text = std::str::from_utf8(bytes).map_err(|_| invalid("Header is not valid UTF-8"))?;
     Ok(text.trim_end_matches(['\r', '\n']).to_owned())
 }
 
 /// Strip ASCII whitespace and validate sequence symbols for text or alignment input.
+///
+/// # Arguments
+///
+/// - `bytes`: Source fragment containing sequence symbols and optional ASCII whitespace.
+/// - `sam`: Whether SAM-specific sequence symbols are allowed.
 fn sequence(bytes: &[u8], sam: bool) -> io::Result<Vec<u8>> {
     bytes
         .iter()
@@ -473,6 +556,10 @@ fn sequence(bytes: &[u8], sam: bool) -> io::Result<Vec<u8>> {
 }
 
 /// Remove line endings and validate printable Phred+33 quality bytes.
+///
+/// # Arguments
+///
+/// - `bytes`: Source fragment containing printable Phred+33 quality characters and line endings.
 fn quality(bytes: &[u8]) -> io::Result<Vec<u8>> {
     bytes
         .iter()
@@ -488,6 +575,10 @@ fn quality(bytes: &[u8]) -> io::Result<Vec<u8>> {
 }
 
 /// Validate numeric SAM core fields and CIGAR, then add a direction derived from FLAG.
+///
+/// # Arguments
+///
+/// - `fields`: Ordered SAM core fields used to validate alignment metadata.
 fn sam_attributes(fields: &[String]) -> io::Result<Vec<(String, String)>> {
     let flag: u16 = fields[1]
         .parse()
@@ -522,6 +613,10 @@ fn sam_attributes(fields: &[String]) -> io::Result<Vec<(String, String)>> {
 }
 
 /// Accept `*` or a series of positive lengths and supported SAM CIGAR operations.
+///
+/// # Arguments
+///
+/// - `cigar`: SAM CIGAR string, or `*` when no alignment operations are supplied.
 fn validate_cigar(cigar: &str) -> io::Result<()> {
     if cigar == "*" {
         return Ok(());

@@ -8,6 +8,12 @@ use ratatui::{
 };
 
 /// Place up to 20-column tab cells after the logo, keeping the active tab visible.
+///
+/// # Arguments
+///
+/// - `area`: Terminal rectangle available for this layout or component.
+/// - `open`: Stable IDs of open tabs, in display order.
+/// - `active`: Stable ID of the currently selected tab.
 pub fn layout(area: Rect, open: &[usize], active: usize) -> Vec<(usize, Rect)> {
     let active_index = open.iter().position(|id| *id == active).unwrap_or(0);
     let visible = (area.width.saturating_sub(4) / 20).max(1) as usize;
@@ -25,6 +31,14 @@ pub fn layout(area: Rect, open: &[usize], active: usize) -> Vec<(usize, Rect)> {
 }
 
 /// Render file labels with stable one-based tab numbers and an active-tab highlight.
+///
+/// # Arguments
+///
+/// - `frame`: Terminal frame into which the current content is drawn.
+/// - `labels`: Stable tab IDs paired with their displayed file names.
+/// - `active`: Stable ID of the currently selected tab.
+/// - `area`: Terminal rectangle available for this layout or component.
+/// - `theme`: Shared application colours for text, borders, focus and selection.
 pub fn draw(
     frame: &mut Frame,
     labels: &[(usize, String)],
@@ -63,6 +77,12 @@ pub fn draw(
 }
 
 /// Return the tab whose visible rectangle contains the given terminal cell.
+///
+/// # Arguments
+///
+/// - `layout`: Visible tab IDs paired with their terminal rectangles.
+/// - `x`: Zero-based terminal column of the pointer.
+/// - `y`: Zero-based terminal row of the pointer.
 pub fn hit(layout: &[(usize, Rect)], x: u16, y: u16) -> Option<usize> {
     layout
         .iter()

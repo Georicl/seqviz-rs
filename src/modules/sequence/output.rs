@@ -6,6 +6,12 @@ use std::io::{self, Write};
 const READ_CHUNK_SIZE: usize = 64 * 1024;
 /// Print FASTA records without materialising an entire sequence in memory.
 /// Format recognition, validation and gzip decoding belong to `Dataset`.
+///
+/// # Arguments
+///
+/// - `dataset`: Open dataset whose existing index is queried or advanced as needed.
+/// - `output`: Writer receiving the formatted FASTA text.
+/// - `width`: Callback returning the current FASTA output line width in sequence characters.
 pub fn write_fasta(
     dataset: &mut Dataset,
     output: &mut impl Write,
@@ -32,6 +38,13 @@ pub fn write_fasta(
 }
 
 /// Stream one indexed record, rereading the requested width at the start of each output line.
+///
+/// # Arguments
+///
+/// - `dataset`: Open dataset whose existing index is queried or advanced as needed.
+/// - `id`: Zero-based ID of the indexed sequence record.
+/// - `output`: Writer receiving the formatted FASTA text.
+/// - `width`: Callback returning the current FASTA output line width in sequence characters.
 fn write_sequence(
     dataset: &mut Dataset,
     id: u64,
@@ -87,6 +100,10 @@ fn write_sequence(
 }
 
 /// Advance one scan chunk and surface recorded parser failures as I/O errors.
+///
+/// # Arguments
+///
+/// - `dataset`: Open dataset whose existing index is queried or advanced as needed.
 fn scan_step(dataset: &mut Dataset) -> io::Result<()> {
     if let Some(error) = dataset.progress().error {
         return Err(io::Error::new(io::ErrorKind::InvalidData, error));
@@ -104,6 +121,11 @@ mod tests {
     use std::fs;
 
     /// Render a temporary FASTA source with a width callback into an in-memory byte buffer.
+    ///
+    /// # Arguments
+    ///
+    /// - `input`: FASTA fixture bytes to write and render.
+    /// - `width`: Callback returning the current FASTA output line width in sequence characters.
     fn render_with_width(input: &[u8], width: impl FnMut() -> usize) -> Vec<u8> {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.fa");
@@ -115,6 +137,11 @@ mod tests {
     }
 
     /// Render a temporary FASTA source at a fixed width and decode its output as UTF-8.
+    ///
+    /// # Arguments
+    ///
+    /// - `input`: FASTA fixture bytes to write and render.
+    /// - `width`: Maximum number of sequence characters per output line.
     fn render(input: &[u8], width: usize) -> String {
         String::from_utf8(render_with_width(input, || width)).unwrap()
     }

@@ -7,6 +7,11 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 /// Render chrome, the active document and its status or input prompt in prepared regions.
+///
+/// # Arguments
+///
+/// - `frame`: Terminal frame into which the current content is drawn.
+/// - `app`: Application state containing the active document and global interface settings.
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let theme = &app.config.theme;
     let layout = app.hits;

@@ -3,6 +3,15 @@ use ratatui::style::Color;
 use std::io;
 
 /// Application chrome colours, separate from biological content palettes.
+///
+/// # Fields
+///
+/// - `background`: Default page background.
+/// - `foreground`: Normal text colour.
+/// - `muted`: Secondary text and shortcut hint colour.
+/// - `border`: Inactive panel border colour.
+/// - `focus`: Focused border, label and cursor-related highlight colour.
+/// - `selection`: Background colour for selected content and the active tab.
 #[derive(Debug, Clone)]
 pub struct Theme {
     /// Default page background.
@@ -34,6 +43,12 @@ impl Default for Theme {
 }
 
 /// Replace a colour only when an override is present, preserving defaults otherwise.
+///
+/// # Arguments
+///
+/// - `target`: Existing theme colour to replace when an override is supplied.
+/// - `value`: Optional terminal colour string. `None` keeps the current colour.
+/// - `key`: Configuration key included in colour-validation errors.
 pub(crate) fn set_color(target: &mut Color, value: Option<String>, key: &str) -> io::Result<()> {
     if let Some(value) = value {
         *target = parse_color(&value, key)?;
@@ -42,6 +57,11 @@ pub(crate) fn set_color(target: &mut Color, value: Option<String>, key: &str) ->
 }
 
 /// Parse a terminal colour and include the configuration key in validation errors.
+///
+/// # Arguments
+///
+/// - `text`: Terminal colour name or value to parse.
+/// - `key`: Configuration key included in colour-validation errors.
 pub(crate) fn parse_color(text: &str, key: &str) -> io::Result<Color> {
     text.parse::<Color>().map_err(|_| {
         io::Error::new(

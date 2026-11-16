@@ -1,6 +1,14 @@
 //! Outer application regions; document layouts are owned by their pages.
 use ratatui::layout::Rect;
 /// Terminal regions shared by rendering and application-level pointer hit testing.
+///
+/// # Fields
+///
+/// - `area`: Full terminal rectangle.
+/// - `tabs`: Single-row tab bar.
+/// - `body`: Region assigned to the active document page.
+/// - `footer`: Two rows for status, shortcuts or an input prompt.
+/// - `too_small`: Whether the terminal fails the minimum size required by the browser.
 #[derive(Default, Clone, Copy)]
 pub(crate) struct Layout {
     /// Full terminal rectangle.
@@ -15,6 +23,10 @@ pub(crate) struct Layout {
     pub too_small: bool,
 }
 /// Reserve one tab row and two footer rows, or flag terminals smaller than 30 × 8.
+///
+/// # Arguments
+///
+/// - `area`: Terminal rectangle available for this layout or component.
 pub(crate) fn calculate(area: Rect) -> Layout {
     if area.width < 30 || area.height < 8 {
         return Layout {

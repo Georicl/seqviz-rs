@@ -4,6 +4,10 @@ use std::path::Path;
 use std::process::Command;
 
 /// Run the compiled command with captured output and an isolated cache directory.
+///
+/// # Arguments
+///
+/// - `paths`: Input file paths in command-line order.
 fn run(paths: &[&Path]) -> std::process::Output {
     let cache = tempfile::tempdir().unwrap();
     Command::new(env!("CARGO_BIN_EXE_sq"))

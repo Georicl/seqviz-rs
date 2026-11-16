@@ -7,6 +7,12 @@ use tempfile::TempDir;
 type Worker = TaskWorker<Request, Update>;
 
 /// Temporary input files and cache directory kept alive for a backend test.
+///
+/// # Fields
+///
+/// - `_directory`: Keeps fixture files and generated caches alive for the test.
+/// - `paths`: Source paths supplied to the worker, including any alias tabs added by a test.
+/// - `cache`: Fixture-local cache root for indexes and source checkpoints.
 struct Fixture {
     /// Keeps fixture files and generated caches alive for the test.
     _directory: TempDir,
@@ -18,6 +24,10 @@ struct Fixture {
 
 impl Fixture {
     /// Write each source into one temporary fixture directory and reserve a separate cache path.
+    ///
+    /// # Arguments
+    ///
+    /// - `contents`: Source bytes for each file to create in the temporary fixture directory.
     fn new(contents: &[&[u8]]) -> Self {
         let directory = TempDir::new().unwrap();
         let paths = contents
@@ -38,6 +48,10 @@ impl Fixture {
     }
 
     /// Start a sequence backend with requests queued before its worker thread begins processing.
+    ///
+    /// # Arguments
+    ///
+    /// - `initial`: Requests queued before the worker starts processing.
     fn start(&self, initial: Vec<Request>) -> Worker {
         let paths = self.paths.clone();
         let cache = self.cache.clone();
@@ -48,6 +62,12 @@ impl Fixture {
 }
 
 /// Build an 80-base viewport request for record zero at a chosen sequence offset.
+///
+/// # Arguments
+///
+/// - `token`: Viewport generation echoed in replies so stale snapshots can be discarded.
+/// - `file`: Zero-based tab ID used to route requests and results.
+/// - `start`: Zero-based sequence coordinate at which the requested interval begins.
 fn view(token: u64, file: usize, start: u64) -> Request {
     Request::View(ViewRequest {
         token,
@@ -202,6 +222,11 @@ fn worker_keeps_the_first_resolved_source_selected_during_indexing() {
 }
 
 /// Wait up to five seconds for a snapshot satisfying the test's acceptance predicate.
+///
+/// # Arguments
+///
+/// - `worker`: Background worker used to send requests and receive results.
+/// - `accept`: Predicate that identifies the snapshot expected by this test.
 fn wait_view(worker: &Worker, accept: impl Fn(&Snapshot) -> bool) -> Snapshot {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -218,6 +243,10 @@ fn wait_view(worker: &Worker, accept: impl Fn(&Snapshot) -> bool) -> Snapshot {
 }
 
 /// Check that an idle worker publishes no update during a short observation window.
+///
+/// # Arguments
+///
+/// - `worker`: Background worker used to send requests and receive results.
 fn assert_quiet(worker: &Worker) {
     assert!(
         matches!(
@@ -306,6 +335,10 @@ fn action_cancel() -> Arc<AtomicBool> {
 }
 
 /// Allow viewport traffic while rejecting replies from stale operations.
+///
+/// # Arguments
+///
+/// - `worker`: Background worker used to send requests and receive results.
 fn assert_no_action_updates(worker: &Worker) {
     let deadline = Instant::now() + Duration::from_millis(250);
     while let Ok(update) = worker

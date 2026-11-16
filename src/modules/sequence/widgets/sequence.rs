@@ -9,6 +9,22 @@ use ratatui::{
     widgets::Paragraph,
 };
 /// Borrowed data, geometry and UI state needed to draw a sequence window.
+///
+/// # Fields
+///
+/// - `snapshot`: Loaded record metadata and sequence bytes for the current viewport generation.
+/// - `theme`: Shared colours for text, selection and focus.
+/// - `palette`: Residue and Phred-score colours for sequence characters.
+/// - `area`: Sequence rectangle, including its coordinate gutter.
+/// - `sequence_rows`: Number of base rows that fit after accounting for quality rows.
+/// - `bases_per_line`: Maximum sequence characters in each base row.
+/// - `gutter`: Terminal columns reserved for the one-based coordinate label.
+/// - `stride`: Terminal rows per base row: one normally, two with aligned quality characters.
+/// - `record`: Requested zero-based record ID, checked against the loaded snapshot.
+/// - `start`: Requested zero-based sequence offset, checked against the loaded window.
+/// - `cursor`: Zero-based sequence coordinate of the keyboard cursor.
+/// - `selection`: Inclusive zero-based endpoints; dragging may reverse their order.
+/// - `focused`: Whether to emphasise the cursor in the active sequence pane.
 pub(crate) struct Props<'a> {
     /// Loaded record metadata and sequence bytes for the current viewport generation.
     pub snapshot: &'a Snapshot,
@@ -39,6 +55,11 @@ pub(crate) struct Props<'a> {
 }
 
 /// Draw only a window matching the requested record/start, using one-based labels for zero-based data.
+///
+/// # Arguments
+///
+/// - `frame`: Terminal frame into which the current content is drawn.
+/// - `props`: Loaded snapshot, layout and selection state needed to draw the sequence window.
 pub(crate) fn draw(frame: &mut Frame, props: Props<'_>) {
     let snapshot = props.snapshot;
     let Some(meta) = &snapshot.record else {

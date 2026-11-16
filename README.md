@@ -8,7 +8,7 @@
 
 **Browse sequences, read quality and variants in your terminal.**
 
-`sq` is a lightweight browser for nucleotide and protein FASTA, FASTQ, SAM/BAM and, new in v0.2.0, VCF. Open plain, gzip or BGZF files, and keep different formats in separate tabs within one window. It runs on macOS and Linux, with an English interface.
+`sq` is a lightweight browser for nucleotide and protein FASTA, FASTQ, SAM/BAM and VCF. Open plain, gzip or BGZF files, and keep different formats in separate tabs within one window. It runs on macOS and Linux, with an English interface.
 
 ```sh
 sq genome.fa
@@ -18,7 +18,13 @@ sq genome.fa variants.vcf.gz
 
 [![v0.2.0 terminal demo: sequence browsing, VCF variants, contig selection, sample genotypes and raw records](assets/demo.gif)](assets/demo.gif)
 
-## New in v0.2.0
+## New in v0.2.2
+
+- **Record filtering and sorting:** filter sequences by name, length, GC, mean quality and alignment MAPQ/FLAG; filter variants by PASS, QUAL, type, ID, contig and position. Sort the results while retaining source-record identity.
+- **VCF sample navigation:** search sample names, pin samples, and select or reorder FORMAT columns. Display colours and copied values follow the selected samples and fields.
+- **Richer statistics:** sequence length, GC and quality distributions, alignment FLAG counts, and VCF type, FILTER, QUAL and genotype completeness summaries.
+
+## Added in v0.2.0
 
 - **VCF browsing:** a variant table, searchable contig picker, coordinate navigation and INFO, Samples and Raw details.
 - **Variant and sample colours:** nucleotide colours for REF/ALT, allele-number colours for GT and matching depth bars for AD. PASS, failed filters and missing values have distinct colours.

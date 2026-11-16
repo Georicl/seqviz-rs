@@ -20,12 +20,24 @@ pub trait Driver {
     /// Return how long the worker may wait for requests before advancing background work.
     fn timeout(&self) -> Duration;
     /// Apply a bounded batch in arrival order; return false to stop the worker.
+    ///
+    /// # Arguments
+    ///
+    /// - `requests`: Batch of backend requests to process in arrival order.
     fn handle_requests(&mut self, requests: impl Iterator<Item = Self::Request>) -> bool;
     /// Advance one unit of background work; return false to end the worker loop.
     fn tick(&mut self) -> bool;
 }
 
 /// Owns request/update channels, cooperative cancellation and the background thread.
+///
+/// # Fields
+///
+/// - `requests`: Sender used by the application to queue backend requests.
+/// - `updates`: Receiver drained by the application for completed backend work.
+/// - `cancel_background`: Shared cooperative cancellation flag observed by background operations.
+/// - `shutdown`: Request sent once when the worker is dropped.
+/// - `thread`: Join handle retained until the backend has shut down.
 pub struct TaskWorker<R, U> {
     /// Sender used by the application to queue backend requests.
     pub requests: mpsc::Sender<R>,
@@ -41,6 +53,12 @@ pub struct TaskWorker<R, U> {
 
 impl<R: Send + 'static, U: Send + 'static> TaskWorker<R, U> {
     /// Construct the backend on its owning thread so its I/O handles stay there.
+    ///
+    /// # Arguments
+    ///
+    /// - `shutdown`: Request sent when the worker is dropped to stop its backend.
+    /// - `build`: Closure run on the worker thread to construct the driver from its update sender
+    ///   and cancellation flag.
     pub fn spawn<B, F>(shutdown: R, build: F) -> Self
     where
         B: Driver<Request = R> + 'static,
@@ -50,6 +68,13 @@ impl<R: Send + 'static, U: Send + 'static> TaskWorker<R, U> {
     }
 
     /// Queue initial requests before starting a backend constructed on its owning thread.
+    ///
+    /// # Arguments
+    ///
+    /// - `shutdown`: Request sent when the worker is dropped to stop its backend.
+    /// - `initial`: Requests queued before the worker starts processing.
+    /// - `build`: Closure run on the worker thread to construct the driver from its update sender
+    ///   and cancellation flag.
     pub fn spawn_with_requests<B, F>(
         shutdown: R,
         initial: impl IntoIterator<Item = R>,
@@ -77,6 +102,10 @@ impl<R: Send + 'static, U: Send + 'static> TaskWorker<R, U> {
     }
 
     /// Queue a request without waiting for processing; ignore a disconnected worker.
+    ///
+    /// # Arguments
+    ///
+    /// - `request`: Request to dispatch to or handle in the owning backend.
     pub fn send(&self, request: R) {
         let _ = self.requests.send(request);
     }
@@ -96,6 +125,11 @@ impl<R, U> Drop for TaskWorker<R, U> {
 }
 
 /// Wait for a request or timeout, drain up to 511 more requests, then advance the driver once.
+///
+/// # Arguments
+///
+/// - `driver`: Backend that handles requests and advances background work on this thread.
+/// - `requests`: Channel from which the worker receives foreground requests.
 fn run<B: Driver>(mut driver: B, requests: mpsc::Receiver<B::Request>) {
     loop {
         let request = requests.recv_timeout(driver.timeout());

@@ -4,6 +4,12 @@ use ratatui::{style::Style, text::Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Width at the original display column, shared with pointer-to-text mapping.
+///
+/// # Arguments
+///
+/// - `ch`: Original character whose display width is being measured.
+/// - `column`: Display column at which the original text character or grapheme begins.
+/// - `stops`: Tab-stop display columns shared by headings, values and pointer mapping.
 pub(super) fn character_width(ch: char, column: usize, stops: &[usize]) -> usize {
     if ch == '\t' {
         stops
@@ -19,6 +25,12 @@ pub(super) fn character_width(ch: char, column: usize, stops: &[usize]) -> usize
 }
 
 /// Measure a complete grapheme at its original display column, including TAB expansion.
+///
+/// # Arguments
+///
+/// - `symbol`: Complete grapheme, including any combining characters or control character.
+/// - `column`: Display column at which the original text character or grapheme begins.
+/// - `stops`: Tab-stop display columns shared by headings, values and pointer mapping.
 pub(super) fn grapheme_width(symbol: &str, column: usize, stops: &[usize]) -> usize {
     let mut chars = symbol.chars();
     match (chars.next(), chars.next()) {
@@ -29,6 +41,12 @@ pub(super) fn grapheme_width(symbol: &str, column: usize, stops: &[usize]) -> us
 
 /// Ratatui's grapheme iterator omits controls. Restore them so TAB expansion and
 /// source character indices still describe the original logical line.
+///
+/// # Arguments
+///
+/// - `text`: Original text whose graphemes and control characters are visited.
+/// - `visit`: Callback receiving each original grapheme or control. Return `false` to stop
+///   iteration.
 pub(super) fn walk_graphemes(text: &str, mut visit: impl FnMut(&str) -> bool) -> bool {
     let span = Span::raw(text);
     let mut offset = 0;
@@ -57,6 +75,10 @@ pub(super) fn walk_graphemes(text: &str, mut visit: impl FnMut(&str) -> bool) ->
 }
 
 /// Every visible sample and its heading share the same column boundaries.
+///
+/// # Arguments
+///
+/// - `view`: Document state containing the current layout, selection and loaded data.
 pub(super) fn tab_stops(view: &VcfView) -> Vec<usize> {
     if view.detail != Detail::Samples {
         return Vec::new();

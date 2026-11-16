@@ -10,6 +10,10 @@ use std::{
 };
 
 /// Convert a measured duration to fractional milliseconds for TSV output.
+///
+/// # Arguments
+///
+/// - `duration`: Measured elapsed time to express in milliseconds.
 fn milliseconds(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }

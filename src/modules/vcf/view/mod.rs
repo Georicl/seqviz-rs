@@ -51,6 +51,12 @@ use std::{
 };
 
 /// The selected representation of the current variant record.
+///
+/// # Variants
+///
+/// - `Info`: INFO keys and values from the selected record.
+/// - `Samples`: Sample values in FORMAT order.
+/// - `Raw`: The preserved original record text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Detail {
     /// INFO keys and values from the selected record.
@@ -70,11 +76,20 @@ impl Detail {
         }
     }
     /// Map a cyclic tab index to INFO, Samples or Raw.
+    ///
+    /// # Arguments
+    ///
+    /// - `index`: Detail-tab index, reduced cyclically across INFO, Samples and Raw.
     fn at(index: usize) -> Self {
         [Self::Info, Self::Samples, Self::Raw][index % 3]
     }
 }
 /// The panel receiving record or detail-row navigation commands.
+///
+/// # Variants
+///
+/// - `Table`: Navigate variant record ordinals.
+/// - `Detail`: Navigate logical rows within the active detail tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     /// Navigate variant record ordinals.
@@ -83,6 +98,12 @@ enum Focus {
     Detail,
 }
 /// Full-document informational panels layered over the variant browser.
+///
+/// # Variants
+///
+/// - `Help`: Keyboard/mouse usage and semantic colour explanations.
+/// - `File`: Source path, compression and index progress.
+/// - `Header`: Original header metadata displayed as reflowed text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Overlay {
     /// Keyboard/mouse usage and semantic colour explanations.
@@ -95,6 +116,14 @@ enum Overlay {
     Statistics,
 }
 /// Uncommitted text for navigation, record predicates or displayed FORMAT fields.
+///
+/// # Variants
+///
+/// - `Position`: Editable positive VCF position to locate.
+/// - `Contig`: Search text used to filter the contig picker.
+/// - `Filter`: Editable record filter and sort expression.
+/// - `Sample`: Sample name search text.
+/// - `Fields`: Comma-separated FORMAT fields to display.
 enum Input {
     /// Editable positive VCF position to locate.
     Position(String),
@@ -108,6 +137,11 @@ enum Input {
     Fields(String),
 }
 /// Identity and cancellation state for a background operation owned by this page.
+///
+/// # Fields
+///
+/// - `id`: Application-wide identity shared by clipboard and statistics operations.
+/// - `cancel`: Flag shared with the owning service to stop obsolete work.
 struct PendingOperation {
     /// Application-wide identity shared by clipboard and statistics operations.
     id: u64,
@@ -117,6 +151,48 @@ struct PendingOperation {
 
 /// Per-tab VCF navigation, selection and rendering state.
 /// Request tokens reject stale snapshots while the backend owns shared source data.
+///
+/// # Fields
+///
+/// - `path`: Original path displayed in file information.
+/// - `file`: Tab index attached to all requests and clipboard operations.
+/// - `config`: VCF layout and semantic colour settings.
+/// - `theme`: Application-wide UI colours.
+/// - `clock`: Shared monotonic ID source for clipboard and statistics operations.
+/// - `enabled`: Whether this tab is active and may accept request-bound updates.
+/// - `snapshot`: Most recently accepted backend viewport and selected record.
+/// - `load_error`: Initial backend error retained separately from transient status messages.
+/// - `contig`: Current contig filter; None displays all source records.
+/// - `query`: Validated record predicates and ordering sent to the backend.
+/// - `filter_text`: Last successfully applied filter expression.
+/// - `samples`: Sample navigation and FORMAT column preferences.
+/// - `sample_query`: Last sample name query used by the next-match command.
+/// - `statistics`: Statistics returned for the last explicit request.
+/// - `statistics_error`: Error returned by the current statistics request.
+/// - `pending_statistics`: Independent identity and cancellation state for the report.
+/// - `selected`: Zero-based selected record ordinal within the active filter.
+/// - `anchor`: Stable source record retained across incremental reordering.
+/// - `start`: Zero-based first visible table ordinal within the active filter.
+/// - `token`: Current viewport or position-lookup generation.
+/// - `locating`: Token of an outstanding position lookup that suppresses normal viewport requests.
+/// - `focus`: Panel receiving row navigation.
+/// - `detail`: Current INFO, Samples or Raw detail tab.
+/// - `detail_row`: Zero-based selected logical detail row.
+/// - `detail_start`: Zero-based first visible logical detail row.
+/// - `horizontal`: Horizontal scroll offset measured in terminal display columns.
+/// - `selection`: Inclusive selection endpoints as logical row and original character indices.
+/// - `dragging`: Whether a left-button text-selection drag is active.
+/// - `drag_anchor`: Initial logical text position of the current drag.
+/// - `overlay`: Active help, file-information, header or statistics panel.
+/// - `input`: Current navigation, filter, sample-search or FORMAT-field editor.
+/// - `picker_row`: Selected index in the filtered contig choices.
+/// - `info`: Reflowed overlay text, scroll position and selection.
+/// - `layout`: Prepared rectangles shared by rendering and event handling.
+/// - `dirty`: Whether the backend viewport must be refreshed.
+/// - `redraw`: Whether the application should draw another frame.
+/// - `message`: Transient status or current error text.
+/// - `pending_copy`: Current clipboard job whose completion may be accepted.
+/// - `actions`: Requests and application-level actions waiting to be drained.
 pub(crate) struct VcfView {
     /// Original path displayed in file information.
     path: PathBuf,
@@ -200,6 +276,14 @@ pub(crate) struct VcfView {
 
 impl VcfView {
     /// Create a dirty document view, enabling the first tab for initial loading.
+    ///
+    /// # Arguments
+    ///
+    /// - `path`: Path of the input file to open or display.
+    /// - `file`: Zero-based tab ID used to route requests and results.
+    /// - `config`: VCF display, detail-layout and semantic-colour settings used by this page.
+    /// - `theme`: Shared application colours for text, borders, focus and selection.
+    /// - `clock`: Shared counter that allocates distinct operation IDs across document pages.
     pub(crate) fn new(
         path: PathBuf,
         file: usize,
@@ -250,6 +334,10 @@ impl VcfView {
         }
     }
     /// Queue a VCF request for the application to forward to its session worker.
+    ///
+    /// # Arguments
+    ///
+    /// - `request`: Request to dispatch to or handle in the owning backend.
     fn send(&mut self, request: Request) {
         self.actions
             .push(Action::Request(ModuleRequest::vcf(request)));
@@ -272,6 +360,10 @@ impl VcfView {
         }
     }
     /// Queue nonempty text with a fresh clipboard operation ID, cancelling the previous copy.
+    ///
+    /// # Arguments
+    ///
+    /// - `text`: UTF-8 text to copy using a fresh cancellable operation.
     fn copy_text(&mut self, text: String) {
         self.cancel_copy();
         if text.is_empty() {
@@ -296,6 +388,10 @@ impl VcfView {
         self.redraw = true;
     }
     /// Select a filtered ordinal, keep it visible and invalidate record-specific detail state.
+    ///
+    /// # Arguments
+    ///
+    /// - `selected`: Zero-based record ordinal within the active contig filter.
     fn change_record(&mut self, selected: u64) {
         self.locating = None;
         self.token += 1;
@@ -325,6 +421,10 @@ impl VcfView {
         self.redraw = true;
     }
     /// Switch detail tabs and clear selection, scrolling and pending clipboard state.
+    ///
+    /// # Arguments
+    ///
+    /// - `detail`: Detail tab to activate, selecting INFO, Samples or Raw content.
     fn change_detail(&mut self, detail: Detail) {
         self.cancel_copy();
         self.detail = detail;
@@ -345,6 +445,11 @@ impl VcfView {
         }
     }
     /// Untruncated logical rows; TABs remain in these strings for copying.
+    ///
+    /// # Arguments
+    ///
+    /// - `start`: Zero-based logical row at which the requested detail page begins.
+    /// - `count`: Maximum number of logical detail rows to return.
     fn detail_rows(&self, start: usize, count: usize) -> Vec<String> {
         let Some(entry) = self.entry() else {
             return Vec::new();
@@ -371,6 +476,11 @@ impl VcfView {
     }
     /// Copy the active record, detail row, selected text or overlay content.
     /// Include the original VCF header when requested from the table or raw-record panel.
+    ///
+    /// # Arguments
+    ///
+    /// - `with_header`: Whether record copying should include the original VCF header when the
+    ///   active context supports it.
     fn copy(&mut self, with_header: bool) {
         if let Some(overlay) = self.overlay {
             let text = if overlay == Overlay::Header && self.info.selection.is_none() {
@@ -518,6 +628,10 @@ impl VcfView {
         (popup, list, start)
     }
     /// Open an informational panel with fresh text-selection and scroll state.
+    ///
+    /// # Arguments
+    ///
+    /// - `overlay`: Informational overlay to open.
     fn open_overlay(&mut self, overlay: Overlay) {
         self.cancel_copy();
         self.cancel_statistics();
@@ -638,6 +752,10 @@ impl VcfView {
 
 impl DocumentView for VcfView {
     /// Recompute layout and keep selected table/detail rows visible after a resize.
+    ///
+    /// # Arguments
+    ///
+    /// - `area`: Terminal rectangle available for this layout or component.
     fn prepare(&mut self, area: Rect) {
         let next = layout::calculate(area, self.config.detail_rows);
         let layout_changed =
@@ -674,14 +792,27 @@ impl DocumentView for VcfView {
         }
     }
     /// Render this document using its prepared layout.
+    ///
+    /// # Arguments
+    ///
+    /// - `frame`: Terminal frame into which the current content is drawn.
     fn draw(&self, frame: &mut Frame) {
         render::draw(frame, self);
     }
     /// Dispatch a keyboard event to VCF navigation and input handling.
+    ///
+    /// # Arguments
+    ///
+    /// - `event`: Keyboard event received from the terminal or the application shell.
     fn key(&mut self, event: crossterm::event::KeyEvent) {
         self.key_event(event);
     }
     /// Dispatch a pointer event to panel navigation and text selection.
+    ///
+    /// # Arguments
+    ///
+    /// - `event`: Pointer event received from the terminal, including its position and button or
+    ///   scroll action.
     fn mouse(&mut self, event: crossterm::event::MouseEvent) {
         self.mouse_event(event);
     }
@@ -712,6 +843,10 @@ impl DocumentView for VcfView {
         self.request();
     }
     /// Apply matching VCF snapshots and lookup results, ignoring stale request generations.
+    ///
+    /// # Arguments
+    ///
+    /// - `update`: Backend reply to route or apply to the matching document and request.
     fn update(&mut self, update: ModuleUpdate) {
         let ModuleUpdate::Vcf(update) = update else {
             return;
@@ -888,6 +1023,10 @@ impl DocumentView for VcfView {
         self.entry().is_some() || self.overlay.is_some()
     }
     /// Accept completion only for this active tab and its uncancelled copy operation.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Operation ID echoed by the clipboard result being checked.
     fn accepts_copy(&self, id: u64) -> bool {
         self.enabled
             && self
@@ -896,6 +1035,11 @@ impl DocumentView for VcfView {
                 .is_some_and(|op| op.id == id && !op.cancel.load(Ordering::Relaxed))
     }
     /// Show the matching clipboard completion message and request a redraw.
+    ///
+    /// # Arguments
+    ///
+    /// - `id`: Operation ID echoed by the clipboard result being checked.
+    /// - `message`: Clipboard completion or failure message displayed for the matching operation.
     fn copy_finished(&mut self, id: u64, message: String) {
         if self.accepts_copy(id) {
             self.pending_copy = None;

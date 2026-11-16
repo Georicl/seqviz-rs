@@ -8,6 +8,10 @@ type Properties = Vec<(String, String)>;
 
 /// Extract present header fields and add a detected-format label. Unknown headers
 /// produce no properties. Accepts headers with or without a leading `@`.
+///
+/// # Arguments
+///
+/// - `header`: Original FASTQ defline text, optionally including a leading `@`.
 pub fn parse_fastq_header(header: &str) -> Properties {
     let header = header.trim_end_matches(['\r', '\n']);
     let header = header.strip_prefix('@').unwrap_or(header);
@@ -24,6 +28,12 @@ pub fn parse_fastq_header(header: &str) -> Properties {
 }
 
 /// Append a property only when its value is nonempty.
+///
+/// # Arguments
+///
+/// - `fields`: Derived header-property list to append to.
+/// - `name`: Name of the derived header property.
+/// - `value`: Property value to append when nonempty.
 fn add(fields: &mut Properties, name: &str, value: &str) {
     if !value.is_empty() {
         fields.push((name.to_owned(), value.to_owned()));
@@ -31,15 +41,28 @@ fn add(fields: &mut Properties, name: &str, value: &str) {
 }
 
 /// Recognise a nonempty sequence of ASCII decimal digits.
+///
+/// # Arguments
+///
+/// - `value`: Header token to check for the expected decimal coordinate syntax.
 fn decimal(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit())
 }
 /// Recognise an ASCII decimal coordinate with an optional leading minus sign.
+///
+/// # Arguments
+///
+/// - `value`: Header token to check for the expected decimal coordinate syntax.
 fn coordinate(value: &str) -> bool {
     decimal(value.strip_prefix('-').unwrap_or(value))
 }
 
 /// Recognise modern or legacy Illumina names and preserve only present read metadata.
+///
+/// # Arguments
+///
+/// - `name`: First whitespace-delimited read-name token from the FASTQ header.
+/// - `rest`: Whitespace-separated header tokens following the read name.
 fn parse_illumina(name: &str, rest: &[&str]) -> Option<Properties> {
     let parts: Vec<_> = name.split(':').collect();
     let mut fields = Vec::new();
@@ -121,6 +144,11 @@ fn parse_illumina(name: &str, rest: &[&str]) -> Option<Properties> {
 }
 
 /// Recognise a UUID plus known ONT metadata and retain additional key/value attributes.
+///
+/// # Arguments
+///
+/// - `name`: First whitespace-delimited read-name token from the FASTQ header.
+/// - `rest`: Whitespace-separated header tokens following the read name.
 fn parse_nanopore(name: &str, rest: &[&str]) -> Option<Properties> {
     let groups: Vec<_> = name.split('-').collect();
     let is_uuid = groups.len() == 5
@@ -173,6 +201,10 @@ fn parse_nanopore(name: &str, rest: &[&str]) -> Option<Properties> {
 }
 
 /// Extract movie, ZMW and optional subread or CCS segment coordinates from a QNAME.
+///
+/// # Arguments
+///
+/// - `name`: First whitespace-delimited read-name token from the FASTQ header.
 fn parse_pacbio(name: &str) -> Option<Properties> {
     let parts: Vec<_> = name.split('/').collect();
     if parts.len() < 3 || parts[0].is_empty() || !decimal(parts[1]) {
@@ -211,6 +243,11 @@ fn parse_pacbio(name: &str) -> Option<Properties> {
 }
 
 /// Separate SRA run accession, spot and read identifiers, retaining supplied name and length.
+///
+/// # Arguments
+///
+/// - `name`: First whitespace-delimited read-name token from the FASTQ header.
+/// - `rest`: Whitespace-separated header tokens following the read name.
 fn parse_sra(name: &str, rest: &[&str]) -> Option<Properties> {
     let (id, slash_read) = name
         .split_once('/')
@@ -254,6 +291,11 @@ mod tests {
     use super::*;
 
     /// Look up one derived header property without consuming the property list.
+    ///
+    /// # Arguments
+    ///
+    /// - `fields`: Parsed header properties to search.
+    /// - `key`: Property name to find.
     fn value<'a>(fields: &'a Properties, key: &str) -> Option<&'a str> {
         fields
             .iter()

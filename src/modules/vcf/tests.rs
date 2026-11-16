@@ -24,14 +24,27 @@ use tempfile::TempDir;
 const HEADER: &str = "##fileformat=VCFv4.3\n##contig=<ID=chr1,length=10000>\n##contig=<ID=chr2,length=10000>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
 
 /// Parse a fixture header and fail immediately if its syntax is invalid.
+///
+/// # Arguments
+///
+/// - `raw`: Complete synthetic VCF header text to parse.
 fn header(raw: &str) -> VcfHeader {
     read_header(&mut Cursor::new(raw)).unwrap().0
 }
 /// Build a minimal passing SNV record for a given contig and VCF position.
+///
+/// # Arguments
+///
+/// - `chrom`: Contig identifier written to the VCF CHROM field.
+/// - `pos`: Position written to the VCF POS field.
 fn record(chrom: &str, pos: u64) -> String {
     format!("{chrom}\t{pos}\trs{pos}\tA\tT\t40\tPASS\tDP=12\n")
 }
 /// Write source bytes into a temporary directory and return source/cache paths.
+///
+/// # Arguments
+///
+/// - `bytes`: Source bytes used to construct the temporary VCF fixture.
 fn fixture(bytes: &[u8]) -> (TempDir, PathBuf, PathBuf) {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("input.vcf");
@@ -40,6 +53,10 @@ fn fixture(bytes: &[u8]) -> (TempDir, PathBuf, PathBuf) {
     (directory, path, cache)
 }
 /// Advance the index until completion, asserting no persistent input error occurs.
+///
+/// # Arguments
+///
+/// - `dataset`: Open dataset whose existing index is queried or advanced as needed.
 fn finish(dataset: &mut Dataset) {
     for _ in 0..10000 {
         let progress = dataset.step(64 * 1024).unwrap();
@@ -51,6 +68,10 @@ fn finish(dataset: &mut Dataset) {
     panic!("Indexing did not finish");
 }
 /// Find the source-specific SQLite database under the fixture cache.
+///
+/// # Arguments
+///
+/// - `cache`: Directory for reusable record indexes and source checkpoints.
 fn database(cache: &Path) -> PathBuf {
     fs::read_dir(cache.join("vcf"))
         .unwrap()
@@ -61,12 +82,20 @@ fn database(cache: &Path) -> PathBuf {
         .join("vcf.sqlite")
 }
 /// Compress fixture bytes into an ordinary gzip stream.
+///
+/// # Arguments
+///
+/// - `bytes`: Source bytes used to construct the temporary VCF fixture.
 fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(bytes).unwrap();
     encoder.finish().unwrap()
 }
 /// Encode fixture bytes as BGZF blocks with checksums and decoded lengths.
+///
+/// # Arguments
+///
+/// - `bytes`: Source bytes used to construct the temporary VCF fixture.
 fn bgzf(bytes: &[u8]) -> Vec<u8> {
     let mut output = Vec::new();
     for chunk in bytes.chunks(32000) {
@@ -527,6 +556,12 @@ fn source_changes_are_rejected_before_using_stale_index() {
 }
 
 /// Build a two-row unfiltered viewport request beginning at the selected ordinal.
+///
+/// # Arguments
+///
+/// - `file`: Zero-based tab ID used to route requests and results.
+/// - `token`: Viewport generation echoed in replies so stale snapshots can be discarded.
+/// - `selected`: Zero-based ordinal selected in the unfiltered variant table.
 fn view(file: usize, token: u64, selected: u64) -> Request {
     Request::View(ViewRequest {
         file,

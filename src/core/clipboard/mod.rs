@@ -8,6 +8,12 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 pub use service::{ClipboardService, ClipboardUpdate};
 
 /// Result of clipboard preparation: a completed system copy or a terminal payload.
+///
+/// # Variants
+///
+/// - `System`: Text has already been delivered to a system clipboard command.
+/// - `Osc52`: Already encoded off-thread. The UI must validate operation identity before writing
+///   it.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ClipboardOutput {
     /// Text has already been delivered to a system clipboard command.
@@ -17,6 +23,10 @@ pub enum ClipboardOutput {
 }
 
 /// Encode UTF-8 bytes as base64 in an OSC 52 clipboard request.
+///
+/// # Arguments
+///
+/// - `text`: UTF-8 text to copy to the system or terminal clipboard.
 fn osc52_sequence(text: &str) -> String {
     format!("\x1b]52;c;{}\x07", STANDARD.encode(text.as_bytes()))
 }

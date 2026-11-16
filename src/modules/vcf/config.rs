@@ -4,6 +4,16 @@ use ratatui::style::Color;
 use serde::{Deserialize, Deserializer, de::Error};
 
 /// VCF display options loaded from the application configuration.
+///
+/// # Fields
+///
+/// - `nucleotides`: Shared nucleotide colours supplied by application configuration.
+/// - `pass_color`: Colour for records whose FILTER field is PASS.
+/// - `filter_color`: Colour for named non-PASS filters.
+/// - `missing_color`: Colour for missing values represented by a dot.
+/// - `allele_colors`: Cyclic colours for one-based ALT indices; REF uses the theme foreground.
+/// - `show_ad_bars`: Whether sample details may append proportional allele-depth bars.
+/// - `detail_rows`: Preferred total height of the detail panel, including its border and headings.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VcfConfig {
@@ -50,12 +60,20 @@ impl Default for VcfConfig {
 }
 
 /// Parse one configured terminal colour and report a serde error on invalid input.
+///
+/// # Arguments
+///
+/// - `deserializer`: Serde deserializer supplying a colour value or list from the configuration.
 fn deserialize_color<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Color, D::Error> {
     let text = String::deserialize(deserializer)?;
     parse_color(&text, "vcf colour").map_err(D::Error::custom)
 }
 
 /// Parse a nonempty list of colours used cyclically for ALT allele indices.
+///
+/// # Arguments
+///
+/// - `deserializer`: Serde deserializer supplying a colour value or list from the configuration.
 fn deserialize_colors<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Color>, D::Error> {
     let values = Vec::<String>::deserialize(deserializer)?;
     if values.is_empty() {

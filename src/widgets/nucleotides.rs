@@ -4,6 +4,10 @@ use ratatui::style::Color;
 use std::io;
 
 /// Case-insensitive colours for bases, ambiguity codes, gaps and unknown bytes.
+///
+/// # Fields
+///
+/// - `colors`: Colours ordered as A, C, G, T, U, ambiguity, gap and unknown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NucleotidePalette {
     /// Colours ordered as A, C, G, T, U, ambiguity, gap and unknown.
@@ -30,6 +34,10 @@ impl Default for NucleotidePalette {
 
 impl NucleotidePalette {
     /// Map an ASCII base or IUPAC ambiguity code to its configured colour.
+    ///
+    /// # Arguments
+    ///
+    /// - `base`: ASCII nucleotide or IUPAC ambiguity symbol, matched case-insensitively.
     pub fn nucleotide_color(&self, base: u8) -> Color {
         let index = match base.to_ascii_uppercase() {
             b'A' => 0,
@@ -45,6 +53,10 @@ impl NucleotidePalette {
     }
 
     /// Apply named nucleotide colour overrides, rejecting unknown classes or invalid colours.
+    ///
+    /// # Arguments
+    ///
+    /// - `colors`: Pairs of nucleotide-class names and terminal colour strings to apply.
     pub(crate) fn apply(
         &mut self,
         colors: impl IntoIterator<Item = (String, String)>,

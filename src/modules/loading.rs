@@ -9,6 +9,19 @@ use ratatui::{Frame, layout::Rect, style::Style, widgets::Paragraph};
 use std::path::PathBuf;
 
 /// Temporary page that requests format probing and displays opening errors.
+///
+/// # Fields
+///
+/// - `path`: Input path shown while probing or reporting errors.
+/// - `file`: Stable tab ID used in open requests and matching replies.
+/// - `theme`: Colours used by the placeholder.
+/// - `area`: Latest document rectangle supplied by the application.
+/// - `sent`: Whether an open request is already pending or has completed.
+/// - `failed`: Whether the last matching probe failed and can be retried on reactivation.
+/// - `enabled`: Whether this tab is active and allowed to request probing.
+/// - `redraw`: Whether the placeholder needs repainting.
+/// - `message`: Opening status or the last probe error.
+/// - `actions`: Open requests waiting for application dispatch.
 pub(crate) struct LoadingView {
     /// Input path shown while probing or reporting errors.
     path: PathBuf,
@@ -34,6 +47,12 @@ pub(crate) struct LoadingView {
 
 impl LoadingView {
     /// Create a loading page, initially enabling only the first input tab.
+    ///
+    /// # Arguments
+    ///
+    /// - `path`: Path of the input file to open or display.
+    /// - `file`: Zero-based tab ID used to route requests and results.
+    /// - `theme`: Shared application colours for text, borders, focus and selection.
     pub(crate) fn new(path: PathBuf, file: usize, theme: Theme) -> Self {
         Self {
             path,
@@ -52,10 +71,18 @@ impl LoadingView {
 
 impl DocumentView for LoadingView {
     /// Store the document region for the opening message.
+    ///
+    /// # Arguments
+    ///
+    /// - `area`: Terminal rectangle available for this layout or component.
     fn prepare(&mut self, area: Rect) {
         self.area = area;
     }
     /// Render the input path and current opening or error message.
+    ///
+    /// # Arguments
+    ///
+    /// - `frame`: Terminal frame into which the current content is drawn.
     fn draw(&self, frame: &mut Frame) {
         frame.render_widget(
             Paragraph::new(format!("{}\n\n{}", self.path.display(), self.message))
@@ -98,6 +125,10 @@ impl DocumentView for LoadingView {
         }
     }
     /// Display a matching open failure and make it eligible for retry on reactivation.
+    ///
+    /// # Arguments
+    ///
+    /// - `update`: Backend reply to route or apply to the matching document and request.
     fn update(&mut self, update: ModuleUpdate) {
         if let ModuleUpdate::OpenFailed { file, text } = update
             && file == self.file
@@ -158,6 +189,10 @@ mod tests {
     use super::*;
 
     /// Drain a loading page's effects and collect only format-probe file IDs.
+    ///
+    /// # Arguments
+    ///
+    /// - `view`: Loading page whose queued opening requests are drained for this test.
     fn open_requests(view: &mut LoadingView) -> Vec<usize> {
         view.actions()
             .into_iter()

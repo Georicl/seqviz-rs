@@ -13,6 +13,13 @@ use std::{
 };
 
 /// Stable identity and supported format labels for a built-in document module.
+///
+/// # Fields
+///
+/// - `kind`: Typed routing identity used by the session and page factory.
+/// - `id`: Stable machine-readable module name.
+/// - `name`: Human-readable module label.
+/// - `formats`: Supported biological file formats, independent of compression.
 #[derive(Clone, Copy)]
 pub struct ModuleDescriptor {
     /// Typed routing identity used by the session and page factory.
@@ -44,6 +51,16 @@ pub fn modules() -> &'static [ModuleDescriptor] {
 }
 
 /// Probing consumes only supplied decoded bytes; it never opens a file or builds an index.
+///
+/// # Arguments
+///
+/// - `prefix`: Already decoded input-prefix bytes used for format recognition.
+/// - `path`: Input path used as a format hint when the decoded prefix is empty.
+///
+/// # Returns
+///
+/// The matching built-in module descriptor, or `None` when the supplied prefix and path do not
+/// identify a supported format.
 pub fn probe(prefix: &[u8], path: &Path) -> Option<&'static ModuleDescriptor> {
     // VCF headers must be recognised before Sequence's permissive SAM probe.
     if prefix.starts_with(b"##fileformat=VCF")
@@ -60,6 +77,14 @@ pub fn probe(prefix: &[u8], path: &Path) -> Option<&'static ModuleDescriptor> {
 }
 
 /// Built-in page factories share only module-owned UI preferences, not document data.
+///
+/// # Fields
+///
+/// - `theme`: Application chrome colours cloned into each page.
+/// - `settings`: Initial sequence display and content-colour preferences.
+/// - `vcf`: Initial VCF display preferences.
+/// - `clock`: Shared monotonic operation-ID source across document pages.
+/// - `shared`: Sequence focus and quality-visibility preferences shared across sequence tabs.
 pub(crate) struct ViewFactory {
     /// Application chrome colours cloned into each page.
     theme: Theme,
@@ -74,6 +99,13 @@ pub(crate) struct ViewFactory {
 }
 impl ViewFactory {
     /// Share theme, module preferences, operation IDs and sequence interaction preferences.
+    ///
+    /// # Arguments
+    ///
+    /// - `theme`: Shared application colours for text, borders, focus and selection.
+    /// - `settings`: Initial display and content-colour settings for sequence pages.
+    /// - `vcf`: Initial display and colour settings for VCF pages.
+    /// - `clock`: Shared counter that allocates distinct operation IDs across document pages.
     pub(crate) fn new(
         theme: Theme,
         settings: SequenceConfig,
@@ -95,11 +127,22 @@ impl ViewFactory {
         }
     }
     /// Create a placeholder page that requests worker-side format detection.
+    ///
+    /// # Arguments
+    ///
+    /// - `path`: Path of the input file to open or display.
+    /// - `file`: Zero-based tab ID used to route requests and results.
     pub(crate) fn loading(&self, path: PathBuf, file: usize) -> Box<dyn DocumentView> {
         Box::new(LoadingView::new(path, file, self.theme.clone()))
     }
 
     /// Module identity comes from the background session, never UI-thread file I/O.
+    ///
+    /// # Arguments
+    ///
+    /// - `path`: Path of the input file to open or display.
+    /// - `file`: Zero-based tab ID used to route requests and results.
+    /// - `module`: Detected document kind used to choose the concrete page implementation.
     pub(crate) fn create(
         &self,
         path: PathBuf,
@@ -127,6 +170,13 @@ impl ViewFactory {
 }
 
 /// The redirected-output capability belongs to the module, not the app shell.
+///
+/// # Arguments
+///
+/// - `path`: Path of the input file to open or display.
+/// - `cache`: Directory for reusable record indexes and source checkpoints.
+/// - `output`: Writer receiving the formatted FASTA text.
+/// - `width`: Callback returning the current FASTA output line width in sequence characters.
 pub(crate) fn write_redirected(
     path: &Path,
     cache: &Path,

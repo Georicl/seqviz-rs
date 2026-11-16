@@ -8,7 +8,7 @@
 
 **在终端里查看序列、测序质量和变异。**
 
-`sq` 是一个轻量的生物序列与变异浏览器，支持核酸和蛋白质 FASTA、FASTQ、SAM/BAM，以及 v0.2.0 新增的 VCF。可直接打开 gzip、BGZF 压缩文件，也可以将多种格式放在同一个窗口的不同标签中浏览。适用于 macOS 和 Linux，界面为英文。
+`sq` 是一个轻量的生物序列与变异浏览器，支持核酸和蛋白质 FASTA、FASTQ、SAM/BAM 和 VCF。可直接打开 gzip、BGZF 压缩文件，也可以将多种格式放在同一个窗口的不同标签中浏览。适用于 macOS 和 Linux，界面为英文。
 
 ```sh
 sq genome.fa
@@ -17,6 +17,12 @@ sq genome.fa variants.vcf.gz
 ```
 
 [![v0.2.0 终端演示：序列浏览、VCF 变异表、contig 选择、样本基因型与原始记录](assets/demo.gif)](assets/demo.gif)
+
+## v0.2.2 新增
+
+- **记录筛选与排序**：序列可按名称、长度、GC、平均质量及比对 MAPQ/FLAG 筛选；VCF 可按 PASS、QUAL、类型、ID、contig 和坐标筛选。排序后仍保留记录在源文件中的身份。
+- **VCF 样本导航**：支持样本名搜索、固定样本，以及 FORMAT 字段选择与排序；显示配色和复制内容与所选样本及字段保持一致。
+- **扩展统计**：增加序列长度、GC 和质量分布、比对 FLAG 统计，以及 VCF 类型、FILTER、QUAL 和基因型完整性统计。
 
 ## v0.2.0 新增
 

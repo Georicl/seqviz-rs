@@ -2,6 +2,11 @@
 use super::*;
 
 /// Write input bytes to a temporary file with the requested extension.
+///
+/// # Arguments
+///
+/// - `content`: Bytes written to the temporary input fixture.
+/// - `extension`: File-name extension assigned to the temporary fixture.
 fn fixture(content: &[u8], extension: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(format!("input.{extension}"));
@@ -10,6 +15,11 @@ fn fixture(content: &[u8], extension: &str) -> (tempfile::TempDir, std::path::Pa
 }
 
 /// Advance bounded scan steps until completion, failing on scan errors or lack of completion.
+///
+/// # Arguments
+///
+/// - `data`: Open dataset used by this query or scan.
+/// - `budget`: Maximum number of logical source bytes to consume in this scan step.
 fn finish(data: &mut Dataset, budget: usize) {
     for _ in 0..100_000 {
         let progress = data.step(budget).unwrap();
