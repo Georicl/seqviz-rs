@@ -358,3 +358,35 @@ fn tab_handoff_preserves_shared_focus_and_quality_setting() {
     assert!(first.focus == Focus::Records);
     assert!(!first.config.show_quality);
 }
+
+/// Escape arriving before the draft loads must respect earlier typed or pasted edits.
+#[test]
+fn escape_after_pending_edit_offers_to_keep_the_draft() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("record.fa");
+    std::fs::write(&path, b">r\nAC\n").unwrap();
+    let cache = dir.path().join("cache");
+    for paste in [false, true] {
+        let mut view = app(path.clone(), &cache);
+        view.key(key(KeyCode::Char('i')));
+        let operation_id = view.editor.as_ref().unwrap().id;
+        if paste {
+            view.paste("T");
+        } else {
+            view.key(key(KeyCode::Char('T')));
+        }
+        view.key(key(KeyCode::Esc));
+        let mut dataset = Dataset::open(&path, &cache).unwrap();
+        view.apply_update(Update::EditReady {
+            file: 0,
+            operation_id,
+            result: Ok(dataset.draft(0).unwrap()),
+        });
+        assert!(view.status().message.contains("again to discard"));
+        view.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(view.actions().iter().any(|a| matches!(a,
+            Action::Request(ModuleRequest::Sequence(msg))
+            if matches!(&msg.payload, Request::Save { draft, .. } if draft.bases == b"TAC")
+        )));
+    }
+}
