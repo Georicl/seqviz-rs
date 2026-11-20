@@ -505,7 +505,7 @@ impl Backend {
         self.dirty |=
             update_statistics(slot, tab, &key, stopped, &self.cancel, &self.updates, file);
         if let Some((_, record)) = self.reindex_record {
-            if !stopped
+            if self.working
                 && slot
                     .dataset
                     .record(record)
