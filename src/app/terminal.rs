@@ -6,7 +6,10 @@ use super::{
 };
 use crate::modules::session::Worker;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -23,7 +26,12 @@ impl Drop for TerminalGuard {
     /// Attempt terminal restoration even when the event loop returns an error.
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
+        let _ = execute!(
+            io::stdout(),
+            DisableBracketedPaste,
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
     }
 }
 
@@ -38,7 +46,12 @@ pub fn run(paths: Vec<PathBuf>, config: Config) -> io::Result<()> {
     let mut app = App::new(paths, config, worker);
     enable_raw_mode()?;
     let _guard = TerminalGuard;
-    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        io::stdout(),
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut last_drag = Instant::now();
     while !app.quit {
@@ -59,6 +72,7 @@ pub fn run(paths: Vec<PathBuf>, config: Config) -> io::Result<()> {
         if event::poll(Duration::from_millis(30))? {
             match event::read()? {
                 Event::Key(key) if key.kind != KeyEventKind::Release => app.key(key),
+                Event::Paste(text) => app.view_mut().paste(&text),
                 Event::Mouse(mouse) => app.mouse(mouse),
                 Event::Resize(_, _) => {
                     app.resized();

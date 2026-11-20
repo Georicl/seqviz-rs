@@ -58,6 +58,8 @@ pub struct ViewRequest {
 /// - `paused`: Whether this tab has paused background indexing.
 #[derive(Clone, Debug)]
 pub struct Snapshot {
+    /// Identity of the indexed source from which the visible record was read.
+    pub(crate) source_identity: [u64; 7],
     /// Original request used to match the snapshot to the active viewport.
     pub request: ViewRequest,
     /// Detected source sequence/alignment format.
@@ -105,6 +107,20 @@ pub struct Snapshot {
 /// - `Close`: Close a tab and release its dataset when no alias remains open.
 /// - `Quit`: Cancel sequence operations and stop the owning worker loop.
 pub enum Request {
+    /// Load a complete record for explicit editing.
+    Edit {
+        /// Prevent an old tab viewport from editing a newer revision.
+        source_identity: [u64; 7],
+        file: usize,
+        operation_id: u64,
+        record: u64,
+    },
+    /// Atomically commit the validated draft to its original source.
+    Save {
+        file: usize,
+        operation_id: u64,
+        draft: Arc<super::data::edit::Draft>,
+    },
     /// Replace the target viewport without cancelling operations in the same file and record.
     View(ViewRequest),
     /// Search filtered/sorted record names from an inclusive result position, wrapping after scanning stops.
@@ -187,6 +203,18 @@ pub enum Request {
 ///   - `file`: Stable tab index associated with this command or result.
 ///   - `text`: Status or backend error text to show for the associated file.
 pub enum Update {
+    /// The requested edit buffer or a recoverable load error.
+    EditReady {
+        file: usize,
+        operation_id: u64,
+        result: Result<super::data::edit::Draft, String>,
+    },
+    /// Result of an explicit source save.
+    Saved {
+        file: usize,
+        operation_id: u64,
+        result: Result<(), String>,
+    },
     /// Publish loaded viewport data and the latest scan/statistics state.
     View(Box<Snapshot>),
     /// Report the record found by a still-current name-search operation.

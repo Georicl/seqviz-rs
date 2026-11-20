@@ -65,6 +65,9 @@ struct Collector {
 }
 
 impl RecordSink for Collector {
+    fn text_boundaries(&mut self, _: u64, _: Option<u64>) -> io::Result<()> {
+        Ok(())
+    }
     /// Expose the lengths already collected for the current in-memory record.
     fn current(&self) -> Option<RecordState> {
         self.current.as_ref().map(|r| RecordState {

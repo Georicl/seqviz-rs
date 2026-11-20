@@ -103,7 +103,7 @@ fn statistics_have_an_independent_cancellable_operation_lifetime() {
     assert!(query.pass_only);
     let statistics = fixture
         .dataset
-        .statistics(contig.as_deref(), &query, Arc::clone(&cancel))
+        .statistics(contig.as_deref(), &query, None, Arc::clone(&cancel))
         .unwrap();
     assert_eq!(statistics.records, 1);
     fixture.view.prepare(Rect::new(0, 0, 60, 20));
@@ -111,7 +111,7 @@ fn statistics_have_an_independent_cancellable_operation_lifetime() {
     fixture.view.update(ModuleUpdate::vcf(Update::Statistics {
         file: 0,
         token,
-        statistics: statistics.clone(),
+        statistics: Box::new(statistics.clone()),
     }));
     assert_eq!(fixture.view.statistics.as_ref().unwrap().records, 1);
     assert!(
@@ -128,7 +128,7 @@ fn statistics_have_an_independent_cancellable_operation_lifetime() {
     fixture.view.update(ModuleUpdate::vcf(Update::Statistics {
         file: 0,
         token,
-        statistics,
+        statistics: Box::new(statistics),
     }));
     assert!(fixture.view.statistics.is_none());
 }

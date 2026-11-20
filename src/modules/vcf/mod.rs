@@ -5,6 +5,7 @@ pub(crate) mod backend;
 pub mod config;
 /// Maintain a resumable SQLite index over decoded VCF source offsets.
 pub(crate) mod data;
+mod frequency;
 /// Expose the optional graph-annotation extension point.
 pub mod graph;
 /// Share preserved VCF records, metadata and index summaries.

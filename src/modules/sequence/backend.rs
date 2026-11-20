@@ -137,6 +137,8 @@ pub(crate) struct Backend {
     last_operation_id: u64,
     /// Whether navigation still needs an indexed prefix even while background work is paused.
     foreground_read: bool,
+    /// After a save, wait for the edited record before resolving filtered/sorted ordinals.
+    reindex_record: Option<(usize, u64)>,
     /// Whether changes require a fresh viewport snapshot.
     dirty: bool,
     /// Timestamp used to throttle viewport publication.
@@ -176,6 +178,7 @@ impl Backend {
             copy: None,
             last_operation_id: 0,
             foreground_read: false,
+            reindex_record: None,
             dirty: false,
             last_publish: Instant::now() - PUBLISH_INTERVAL,
             working: false,
@@ -261,6 +264,12 @@ impl Backend {
                 }
             }
         }
+        if self
+            .reindex_record
+            .is_some_and(|target| target != (file, next.record))
+        {
+            self.reindex_record = None;
+        }
         let context_changed = self.view.as_ref().is_some_and(|old| {
             old.file != file
                 || old.record != next.record
@@ -303,6 +312,56 @@ impl Backend {
                 return false;
             }
             Request::View(next) => self.set_view(next),
+            Request::Edit {
+                source_identity,
+                file,
+                operation_id,
+                record,
+            } => {
+                let result = self.slots[self.files.owner(file)]
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("Source unavailable"))
+                    .and_then(|slot| {
+                        if slot.dataset.source_identity != source_identity {
+                            return Err(io::Error::other(
+                                "Record changed; refresh the view before editing",
+                            ));
+                        }
+                        slot.dataset.draft(record)
+                    })
+                    .map_err(|e| e.to_string());
+                let _ = self.updates.send(Update::EditReady {
+                    file,
+                    operation_id,
+                    result,
+                });
+            }
+            Request::Save {
+                file,
+                operation_id,
+                draft,
+            } => {
+                let owner = self.files.owner(file);
+                let result = self.slots[owner]
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("Source unavailable"))
+                    .and_then(|slot| slot.dataset.save_draft(&draft))
+                    .map_err(|e| e.to_string());
+                if result.is_ok() {
+                    self.cancel_operations();
+                    self.slots[owner] = None;
+                    if let Some(view) = self.view.take() {
+                        self.tabs[file].paused = false;
+                        self.reindex_record = Some((file, draft.record));
+                        self.set_view(view);
+                    }
+                }
+                let _ = self.updates.send(Update::Saved {
+                    file,
+                    operation_id,
+                    result,
+                });
+            }
             Request::Search {
                 operation_id,
                 file,
@@ -445,6 +504,19 @@ impl Backend {
         }
         self.dirty |=
             update_statistics(slot, tab, &key, stopped, &self.cancel, &self.updates, file);
+        if let Some((_, record)) = self.reindex_record {
+            if self.working
+                && slot
+                    .dataset
+                    .record(record)
+                    .ok()
+                    .flatten()
+                    .is_none_or(|r| !r.complete)
+            {
+                return true;
+            }
+            self.reindex_record = None;
+        }
         if self.dirty && self.last_publish.elapsed() >= PUBLISH_INTERVAL {
             match snapshot(slot, current.clone(), tab.paused, Arc::clone(&self.cancel)) {
                 Ok(snapshot) => {
@@ -603,6 +675,7 @@ fn snapshot(
             progress.error = Some(error.clone());
         }
         Ok(Snapshot {
+            source_identity: dataset.source_identity,
             records: page.records,
             matching_records: page.total,
             format: dataset.format(),

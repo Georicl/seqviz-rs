@@ -9,6 +9,11 @@ impl App {
     /// - `key`: Keyboard event received from the terminal or the application shell.
     pub fn key(&mut self, key: KeyEvent) {
         self.redraw = true;
+        if self.view().captures_quit() {
+            self.view_mut().key(key);
+            self.flush_actions();
+            return;
+        }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.quit = true;
             return;

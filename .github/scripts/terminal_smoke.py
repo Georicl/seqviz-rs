@@ -11,7 +11,7 @@ out.mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='seqviz-ui-') as tmp:
     tmp = Path(tmp)
     fa = tmp / 'sequence.fa'
-    fa.write_text('>seq1 description\n' + 'ACGT' * 2000 + '\n>seq2\nTTTTCCCC\n')
+    fa.write_text('>seq1 description\n' + 'ACGT' * 2000 + '\n>seq2\nTTTT\nCCCC\n')
     fq = tmp / 'reads.fastq'
     fq.write_text('@INST:1:FLOW:2:3:4:5 1:N:0:ACGT\n' + 'ACGT' * 40 + '\n+\n' + '!5I~' * 40 + '\n')
     master, slave = os.openpty()
@@ -54,6 +54,11 @@ with tempfile.TemporaryDirectory(prefix='seqviz-ui-') as tmp:
         wait_for(lambda s:'seq1 description' in s and 'row 1 / 2' in s, '01c-clear-filter')
         send(b']')
         wait_for(lambda s:'seq2' in s and 'TTTTCCCC' in s and 'row 2 /' in s, '02-next-record')
+        # Replace positions 4-6 across physical FASTA lines; queue the paste and save
+        # immediately after i so worker latency cannot consume the first keystrokes.
+        send(b':4\rvlli\x1b[200~a\ng\x1b[201~\x13')
+        wait_for(lambda s:'Saved' in s and 'TTTagCC' in s, '02a-cross-line-fasta-edit')
+        assert fa.read_text().endswith('>seq2\nTTTa\ngCC\n')
         send(b'/seq1\r')
         wait_for(lambda s:'seq1 description' in s and 'Match found' in s, '03-search')
         send(b':5\r')
@@ -97,8 +102,20 @@ with tempfile.TemporaryDirectory(prefix='seqviz-ui-') as tmp:
         wait_for(lambda s:'Statistics' in s and 'N50:' in s, '07-statistics')
         send(b'q\t')
         wait_for(lambda s:'FASTQ' in s and 'Quality:' not in s and 'Q ' in s and '!5I~' in s, '08-fastq')
+        # Paste into the first read and fill the new base qualities before saving.
+        original_fastq = fq.read_bytes()
+        send(b'i\x1b[200~a\nG\x1b[201~\x13')
+        wait_for(lambda s:'Enter Phred+33 quality' in s, '08a-fastq-needs-quality')
+        assert fq.read_bytes() == original_fastq
+        send(b'\x1b[200~I!\x1b[201~\x13')
+        wait_for(lambda s:'Saved' in s and 'aGACGT' in s, '08b-paste-and-save')
+        assert fq.read_bytes() == original_fastq.replace(b'\nACGT', b'\naGACGT',1).replace(b'\n!5I~',b'\nI!!5I~',1)
+        send(b'iT\x1b')
+        wait_for(lambda s:'again to discard' in s, '08c-unsaved-draft')
+        send(b'\x1b')
+        wait_for(lambda s:'Back to browsing' in s, '08d-discard')
         send(b'Q')
-        wait_for(lambda s:'FASTQ' in s and '!5I~' not in s, '09-quality-toggle')
+        wait_for(lambda s:'Back to browsing' in s and '!5I~' not in s, '09-quality-toggle')
         send(b'\t')
         wait_for(lambda s:'SAM ·' in s and 'row 1 /' in s, '10-sam')
         send(b'y')

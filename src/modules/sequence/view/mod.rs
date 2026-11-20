@@ -1,4 +1,6 @@
 //! State and interaction controller for one sequence document page.
+/// Explicit FASTA/FASTQ edit buffer and typed/pasted input.
+mod editor;
 /// Keyboard, pointer and edge-scroll interaction for sequence documents.
 mod events;
 /// Terminal pane geometry and zero-based sequence hit testing.
@@ -173,6 +175,7 @@ pub(crate) struct SharedInteraction {
 pub(crate) struct SequenceView {
     /// Per-tab navigation state and its latest accepted data snapshot.
     pub(crate) document: SequenceState,
+    editor: Option<editor::Editor>,
     /// Stable tab index used to route requests and replies.
     pub(crate) file: usize,
     /// Whether this view is active and may accept operation results.
@@ -262,6 +265,7 @@ impl SequenceView {
         shared: Rc<RefCell<SharedInteraction>>,
     ) -> Self {
         Self {
+            editor: None,
             document: SequenceState {
                 path,
                 record: 0,
@@ -519,6 +523,52 @@ impl SequenceView {
     fn apply_update(&mut self, update: Update) {
         self.redraw = true;
         match update {
+            Update::EditReady {
+                operation_id,
+                result,
+                ..
+            } if self.editor.as_ref().is_some_and(|e| e.id == operation_id) => match result {
+                Ok(draft) => {
+                    let edit = self.editor.as_mut().unwrap();
+                    edit.load(draft);
+                    for input in std::mem::take(&mut edit.pending) {
+                        if self.editor.is_none() {
+                            break;
+                        }
+                        match input {
+                            editor::PendingInput::Key(key) => self.edit_key(key),
+                            editor::PendingInput::Paste(text) => self.paste(&text),
+                        }
+                    }
+                }
+                Err(error) => {
+                    self.editor = None;
+                    self.document.message = error;
+                }
+            },
+            Update::Saved {
+                operation_id,
+                result,
+                ..
+            } if self.editor.as_ref().is_some_and(|e| e.id == operation_id) => match result {
+                Ok(()) => {
+                    let editor = self.editor.take().unwrap();
+                    self.document.cursor = editor.cursor.saturating_sub(1) as u64;
+                    self.document.start = self.document.cursor
+                        / self.hits.bases_per_line.max(1) as u64
+                        * self.hits.bases_per_line.max(1) as u64;
+                    self.document.snapshot = None;
+                    self.document.selection = None;
+                    self.document.message = "Saved".into();
+                    self.token += 1;
+                    self.dirty = true;
+                }
+                Err(error) => {
+                    let editor = self.editor.as_mut().unwrap();
+                    editor.saving = false;
+                    editor.message = error;
+                }
+            },
             Update::View(snapshot) => {
                 let file = snapshot.request.file;
                 if !self.enabled
@@ -692,6 +742,16 @@ impl DocumentView for SequenceView {
     fn key(&mut self, event: crossterm::event::KeyEvent) {
         self.key(event);
     }
+    fn paste(&mut self, text: &str) {
+        if let Some(edit) = self.editor.as_mut() {
+            edit.insert(text);
+        } else if let Some(Input::Search(value) | Input::Position(value) | Input::Filter(value)) =
+            &mut self.input
+        {
+            value.extend(text.chars().filter(|c| !c.is_control()));
+        }
+        self.redraw = true;
+    }
     /// Forward a document pointer event to sequence-specific interaction handling.
     ///
     /// # Arguments
@@ -699,19 +759,24 @@ impl DocumentView for SequenceView {
     /// - `event`: Pointer event received from the terminal, including its position and button or
     ///   scroll action.
     fn mouse(&mut self, event: crossterm::event::MouseEvent) {
-        self.mouse(event);
+        if self.editor.is_none() {
+            self.mouse(event);
+        }
     }
     /// Continue edge-drag scrolling without requiring another pointer event.
     fn tick(&mut self) {
         self.drag_scroll();
     }
     /// Keep keyboard navigation inside an active prompt or information page.
+    fn captures_quit(&self) -> bool {
+        self.editor.is_some()
+    }
     fn captures_input(&self) -> bool {
-        self.input.is_some() || self.page.is_some()
+        self.editor.is_some() || self.input.is_some() || self.page.is_some()
     }
     /// Keep tab-area mouse events inside an open information-page interaction.
     fn captures_tab_mouse(&self) -> bool {
-        self.page.is_some()
+        self.editor.is_some() || self.page.is_some()
     }
     /// Report whether a fresh viewport request is needed.
     fn is_dirty(&self) -> bool {

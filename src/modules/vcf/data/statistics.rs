@@ -14,9 +14,10 @@ impl Dataset {
     /// Aggregate one filtered indexed prefix, with cancellation checked by SQLite's progress hook.
     /// Genotype summaries are indexed per record, so this never materializes all sample values.
     pub(crate) fn statistics(
-        &self,
+        &mut self,
         contig: Option<&str>,
         query: &Query,
+        samples: Option<&[usize]>,
         cancel: Arc<AtomicBool>,
     ) -> io::Result<Statistics> {
         self.check_source()?;
@@ -33,7 +34,12 @@ impl Dataset {
             1000,
             Some(move || flag.load(Ordering::Relaxed) || worker.load(Ordering::Relaxed)),
         );
-        let result = self.aggregate_statistics(contig, query);
+        let result = self
+            .aggregate_statistics(contig, query)
+            .and_then(|mut statistics| {
+                self.frequency_distribution(contig, query, samples, &cancel, &mut statistics)?;
+                Ok(statistics)
+            });
         self.db.progress_handler(0, None::<fn() -> bool>);
         if cancel.load(Ordering::Relaxed) || self.query_cancel.load(Ordering::Relaxed) {
             return Err(io::Error::new(
@@ -43,6 +49,87 @@ impl Dataset {
         }
         self.check_source()?;
         result
+    }
+
+    /// Use indexed ALT bins for whole-cohort summaries. For an explicit subset, reread
+    /// matching records in source order in bounded batches, checking cancellation per row.
+    fn frequency_distribution(
+        &mut self,
+        contig: Option<&str>,
+        query: &Query,
+        samples: Option<&[usize]>,
+        cancel: &AtomicBool,
+        stats: &mut Statistics,
+    ) -> io::Result<()> {
+        let (predicate, values) = predicate(query, contig);
+        let sql_text = format!(
+            "SELECT gt_bin,info_bin,COUNT(*) FROM records JOIN allele_bins ON id=record_id
+                               WHERE {predicate} GROUP BY gt_bin,info_bin"
+        );
+        let mut statement = self.db.prepare(&sql_text).map_err(sql)?;
+        let bins = statement
+            .query_map(params_from_iter(&values), |row| {
+                Ok((
+                    row.get::<_, usize>(0)?,
+                    row.get::<_, usize>(1)?,
+                    row.get::<_, u64>(2)?,
+                ))
+            })
+            .map_err(sql)?;
+        for group in bins {
+            let (gt, info, count) = group.map_err(sql)?;
+            stats.gt_af[gt] += count;
+            stats.info_af[info] += count;
+        }
+        drop(statement);
+        stats.af_scope = format!("all {} samples", self.header.samples.len());
+        let Some(indices) = samples else {
+            return Ok(());
+        };
+        stats.af_scope = format!("{} pinned samples", indices.len());
+        stats.gt_af = [0; 5];
+        if indices.is_empty() {
+            stats.gt_af[4] = stats.info_af.iter().sum();
+            return Ok(());
+        }
+        let batch_sql = format!(
+            "SELECT id,offset,bytes FROM records WHERE {predicate} AND id>? ORDER BY id LIMIT 128"
+        );
+        let mut last_id = -1i64;
+        loop {
+            let mut parameters = values.clone();
+            parameters.push(last_id.into());
+            let batch = self
+                .db
+                .prepare_cached(&batch_sql)
+                .map_err(sql)?
+                .query_map(params_from_iter(parameters), |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })
+                .map_err(sql)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sql)?;
+            if batch.is_empty() {
+                break;
+            }
+            for range in batch {
+                if cancel.load(Ordering::Relaxed) || self.query_cancel.load(Ordering::Relaxed) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "Statistics cancelled",
+                    ));
+                }
+                last_id = range.0 as i64;
+                if let Some(entry) = self.entry_range(Some(range))? {
+                    let frequencies =
+                        super::super::frequency::Frequencies::read(&entry.record, Some(indices));
+                    for i in 0..frequencies.counts.len() {
+                        stats.gt_af[super::super::frequency::bin(frequencies.gt_frequency(i))] += 1;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Execute bounded-size SQL aggregates; the progress hook is owned by `statistics`.
@@ -69,6 +156,9 @@ impl Dataset {
             .db
             .query_row(&statement, params_from_iter(values.clone()), |row| {
                 Ok(Statistics {
+                    gt_af: [0; 5],
+                    info_af: [0; 5],
+                    af_scope: String::new(),
                     records: row.get(0)?,
                     pass: row.get(1)?,
                     filter_missing: row.get(2)?,

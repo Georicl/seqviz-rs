@@ -4,6 +4,12 @@ use super::model::VariantKind;
 /// One explicit statistics request, never recomputed as part of ordinary redraws.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Statistics {
+    /// ALT counts by frequency bin, from selected GTs and original INFO respectively.
+    pub gt_af: [u64; 5],
+    /// ALT histogram using the original INFO/AF annotation.
+    pub info_af: [u64; 5],
+    /// Explicit GT denominator scope; INFO annotations always retain the file scope.
+    pub af_scope: String,
     /// Matching indexed records, including records with missing QUAL.
     pub records: u64,
     /// Whether the source index has reached EOF without an input error.
@@ -80,6 +86,21 @@ impl Statistics {
             .zip(self.qual_bins)
         {
             lines.push(format!("QUAL {label}: {count}"));
+        }
+        lines.push(String::new());
+        lines.push(format!(
+            "ALT FREQUENCIES · GT: {} · INFO/AF: file",
+            self.af_scope
+        ));
+        lines.push("Frequency       GT     INFO/AF   (ALT counts)".into());
+        for (i, label) in ["0%", "(0,1%)", "[1,5%)", "[5,100%]", "Unavailable"]
+            .iter()
+            .enumerate()
+        {
+            lines.push(format!(
+                "{label:<12} {:>6} {:>10}",
+                self.gt_af[i], self.info_af[i]
+            ));
         }
         let known = self.called_genotypes + self.missing_genotypes + self.partial_genotypes;
         let incomplete = self.missing_genotypes + self.partial_genotypes;

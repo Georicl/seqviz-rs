@@ -89,6 +89,8 @@ impl Fixture {
             .query_entry(request.contig.as_deref(), &request.query, request.selected)
             .unwrap();
         let snapshot = Snapshot {
+            matrix: Vec::new(),
+            frequencies: Vec::new(),
             rows: self
                 .dataset
                 .query_rows(

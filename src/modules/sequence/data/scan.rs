@@ -113,6 +113,8 @@ pub(super) trait RecordSink {
     /// - `has_sequence`: Whether this record contains a sequence, independently of its current
     ///   indexed length.
     fn begin_record(&mut self, header: String, has_sequence: bool) -> io::Result<()>;
+    /// Remember decoded boundaries for rewriting text records, including empty ones.
+    fn text_boundaries(&mut self, body: u64, separator: Option<u64>) -> io::Result<()>;
     /// Store the complete FASTQ separator line, including its leading `+`.
     ///
     /// # Arguments

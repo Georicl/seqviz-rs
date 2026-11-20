@@ -23,6 +23,7 @@ fn app(path: PathBuf, cache: &std::path::Path) -> SequenceView {
         data.step(64 * 1024).unwrap();
     }
     let snapshot = Snapshot {
+        source_identity: [0; 7],
         request: ViewRequest {
             token: 1,
             file: 0,
