@@ -103,6 +103,12 @@ impl SequenceView {
         if key.code == KeyCode::Esc
             || key == KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
         {
+            // The queued input may change the draft. Replay it before deciding
+            // whether leaving requires confirmation.
+            if !edit.pending.is_empty() {
+                edit.pending.push(PendingInput::Key(key));
+                return;
+            }
             if edit.changed && !edit.discard {
                 edit.discard = true;
                 edit.message = "Unsaved changes · Esc again to discard · Ctrl+S to save".into();
