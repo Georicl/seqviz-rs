@@ -14,6 +14,10 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 /// - `frame`: Terminal frame into which the current content is drawn.
 /// - `app`: Sequence-page state containing the loaded snapshot, navigation and display settings.
 pub(crate) fn draw(frame: &mut Frame, app: &SequenceView) {
+    if let Some(edit) = &app.editor {
+        edit.draw(frame, app.hits.area, &app.theme, &app.config.palette);
+        return;
+    }
     let body = app.hits.area;
     let left = app.hits.left;
     let right = app.hits.right;
@@ -212,6 +216,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &SequenceView) {
 ///
 /// - `app`: Sequence-page state containing the loaded snapshot, navigation and display settings.
 pub(crate) fn status(app: &SequenceView) -> crate::modules::view::Status {
+    if let Some(edit) = &app.editor {
+        return edit.status();
+    }
     let status = if !app.tab().message.is_empty() {
         app.tab().message.clone()
     } else if let Some(snapshot) = &app.tab().snapshot {
@@ -248,7 +255,7 @@ pub(crate) fn status(app: &SequenceView) -> crate::modules::view::Status {
         "Opening…".into()
     };
     let hints = if app.can_copy() {
-        "? help  / name  f filter  s sort  : position  y copy  Tab file  F4 stats  q quit"
+        "? help  / name  f filter  s sort  : position  i edit  y copy  Tab file  F4 stats  q quit"
     } else {
         "? help  / name  f filter  s sort  : position  Tab file  F4 stats  q quit"
     };

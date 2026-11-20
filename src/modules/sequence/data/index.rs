@@ -176,7 +176,7 @@ impl RecordIndex {
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-2048; PRAGMA temp_store=FILE;
             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS records(
-                id INTEGER PRIMARY KEY, name TEXT NOT NULL, header TEXT NOT NULL, plus TEXT NOT NULL DEFAULT '+',
+                id INTEGER PRIMARY KEY, name TEXT NOT NULL, header TEXT NOT NULL, body INTEGER, separator INTEGER, quality_start INTEGER, record_end INTEGER, plus TEXT NOT NULL DEFAULT '+',
                 length INTEGER NOT NULL DEFAULT 0, qlen INTEGER NOT NULL DEFAULT 0, complete INTEGER NOT NULL DEFAULT 0,
                 seqtype INTEGER NOT NULL DEFAULT 0, gc INTEGER NOT NULL DEFAULT 0,
                 has_seq INTEGER NOT NULL DEFAULT 1, has_qual INTEGER NOT NULL DEFAULT 0,
@@ -656,6 +656,14 @@ impl RecordIndex {
         self.flush_span()?;
         self.save_current(true)?;
         self.current = None;
+        if !self.format.is_alignment() {
+            self.db
+                .execute(
+                    "UPDATE records SET record_end=? WHERE id=?",
+                    params![next_offset, self.progress.records - 1],
+                )
+                .map_err(sql)?;
+        }
         self.set_meta("resume", &next_offset.to_string())
     }
 
@@ -782,6 +790,24 @@ impl RecordIndex {
 }
 
 impl RecordSink for RecordIndex {
+    fn text_boundaries(&mut self, body: u64, separator: Option<u64>) -> io::Result<()> {
+        let id = self
+            .current
+            .as_ref()
+            .ok_or_else(|| invalid("Missing text record"))?
+            .id;
+        if let Some(start) = separator {
+            self.db.execute(
+                "UPDATE records SET separator=?, quality_start=? WHERE id=?",
+                params![start, body, id],
+            )
+        } else {
+            self.db
+                .execute("UPDATE records SET body=? WHERE id=?", params![body, id])
+        }
+        .map_err(sql)?;
+        Ok(())
+    }
     /// Expose the current record's decoded sequence and quality lengths to the scanner.
     fn current(&self) -> Option<RecordState> {
         self.current.as_ref().map(|c| RecordState {

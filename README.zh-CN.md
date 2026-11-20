@@ -135,6 +135,14 @@ cargo run --release --locked -- test/test.fa test/alignments.bam test/variants.v
 
 序列 F4 统计覆盖全文件已完成索引的记录，包括长度、GC、记录平均质量的区间分布，按质量字符数加权的平均 Phred 与 Q30，以及 SAM/BAM 的 mapped、unmapped、primary、secondary、supplementary 和 duplicate 计数。筛选列表不改变全文件统计的范围；索引尚未完成时显示计算状态。
 
+### 编辑 FASTA / FASTQ
+
+移动到要编辑的位置，或先选中一段序列，再按 `i`。编辑器载入当前记录；直接输入或使用终端的粘贴快捷键（macOS 上通常为 ⌘V）。粘贴多行序列时会去掉空白。已有选区会被替换。方向键移动光标，Shift 加方向键选择，Backspace 和 Delete 删除。
+
+FASTQ 中上下两行分别是序列和 Phred+33 质量字符。删除碱基会同步删除质量值。新输入或替换的碱基用 `·` 标出待填的质量，按 Tab 跳到质量行，输入或粘贴相应的质量字符。再次按 Tab 回到序列。
+
+`Ctrl+S` 保存到原文件并刷新索引。按 Esc 返回；有未保存修改时，再按一次 Esc 放弃草稿。普通文本、gzip 和 BGZF 保留原压缩类型。SAM/BAM 和 VCF 不进入此编辑模式。
+
 ### VCF 浏览
 
 主表显示 CHROM、POS、ID、REF、ALT、TYPE、QUAL、FILTER；窄窗口优先保留 CHROM、POS、REF、ALT。多 ALT 包含不同变异类型时显示 MIXED。
@@ -198,7 +206,7 @@ opener 使用 `block = true`。选中文件按 Enter 打开，按 `q` 退出后�
 
 `sq` 先显示首屏，再分块建立索引。可见记录与内容按窗口读取，VCF 只保留当前选中的原始记录并按需解析样本。索引与解压检查点保存在 `$XDG_CACHE_HOME/seqviz-rs/`，默认 `~/.cache/seqviz-rs/`；再次打开可复用，源文件变化会使旧索引失效。普通 gzip 使用解压检查点，不生成完整解压副本。首次访问尚未索引的远处位置仍需扫描或解压。
 
-原始文件保持只读。FASTA 可以重定向输出文本，其他格式使用交互终端。
+浏览不会写入源文件。FASTA 可以重定向输出文本，其他格式使用交互终端。
 
 默认主题开箱可用。将 [config/config.toml](config/config.toml) 与 [config/content.toml](config/content.toml) 放到 `~/.config/seqviz-rs/`；使用绝对路径的 `XDG_CONFIG_HOME` 时，放到其下的 `seqviz-rs/` 目录。
 

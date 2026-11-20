@@ -183,6 +183,7 @@ impl TextScanner {
                 .extend_from_slice(if header { &bytes[1..] } else { bytes });
             if end {
                 records.begin_record(defline(&self.text)?, true)?;
+                records.text_boundaries(offset + bytes.len() as u64, None)?;
                 self.text.clear();
                 self.phase = Phase::Sequence;
             }
@@ -238,6 +239,7 @@ impl TextScanner {
                 self.text.extend_from_slice(content);
                 if end {
                     records.begin_record(defline(&self.text)?, true)?;
+                    records.text_boundaries(offset + bytes.len() as u64, None)?;
                     self.text.clear();
                     self.phase = Phase::Sequence;
                 }
@@ -257,6 +259,11 @@ impl TextScanner {
                 if end {
                     let plus = defline(&self.text)?;
                     records.set_plus(plus)?;
+                    let quality_start = offset + bytes.len() as u64;
+                    records.text_boundaries(
+                        quality_start,
+                        Some(quality_start - self.text.len() as u64),
+                    )?;
                     self.text.clear();
                     self.phase = Phase::Quality;
                 }
@@ -479,6 +486,7 @@ impl TextScanner {
             Format::Fasta => {
                 if self.phase == Phase::Header {
                     records.begin_record(defline(&self.text)?, true)?;
+                    records.text_boundaries(position, None)?;
                 }
                 if records.current().is_some() {
                     records.end_record(position)?;

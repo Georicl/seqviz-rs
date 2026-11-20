@@ -833,7 +833,9 @@ impl Index {
             .fold(0xcbf29ce484222325u64, |hash, byte| {
                 (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
             });
-        let name = format!("source-{hash:016x}");
+        // A save atomically replaces the inode. Readers of the previous file may
+        // still hold its checkpoint lock while the new version is opening.
+        let name = format!("source-{hash:016x}-{:x}-{:x}", identity[0], identity[1]);
         let table = OpenOptions::new()
             .create(true)
             .truncate(false)

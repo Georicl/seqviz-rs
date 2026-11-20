@@ -135,6 +135,14 @@ Press `s` to cycle source order, ascending name, descending length, GC and mean 
 
 Sequence F4 statistics cover completed records across the whole indexed file: length, GC and mean-quality distributions, score-weighted mean Phred and Q30, and SAM/BAM mapped, unmapped, primary, secondary, supplementary and duplicate counts. Filtering the list does not change this file-wide scope. An unfinished index is identified in the statistics status.
 
+### Editing FASTA and FASTQ
+
+Move to a sequence position or select a range, then press `i` to edit the current record. Type or use the terminal's paste shortcut (usually ⌘V on macOS). Multiline sequence pastes ignore whitespace and replace any selection. Use arrows to move, Shift+arrows to select, and Backspace or Delete to remove bases.
+
+In FASTQ, the second row contains Phred+33 quality characters. Deleting bases removes their qualities. New or replaced bases show a dot (·) until you enter their quality characters. Tab switches to the quality track at the first missing score; type or paste quality characters, then Tab back to bases.
+
+Ctrl+S saves to the original file and refreshes its index. Esc returns to browsing; press Esc again to discard a changed draft. Plain text, gzip and BGZF retain their compression type. SAM/BAM and VCF remain read-only.
+
 ### VCF browsing
 
 The table shows CHROM, POS, ID, REF, ALT, TYPE, QUAL and FILTER. Narrow windows prioritise CHROM, POS, REF and ALT. A record with different ALT variant types is labelled MIXED.
@@ -198,7 +206,7 @@ The opener uses `block = true`. Press Enter on a file to open it, then `q` to re
 
 `sq` displays the first screen, then builds the index in chunks. Visible records and content are loaded for the current window; VCF keeps the selected raw record and parses samples as needed. Indexes and decompression checkpoints persist under `$XDG_CACHE_HOME/seqviz-rs/`, defaulting to `~/.cache/seqviz-rs/`. They are reused on later opens and invalidated when the source changes. Ordinary gzip uses checkpoints without making a full uncompressed copy. First access to a distant, unindexed position still requires scanning or decompression.
 
-Source files stay read-only. FASTA supports redirected text output; other formats use an interactive terminal.
+Browsing leaves the source untouched. FASTA supports redirected text output; other formats use an interactive terminal.
 
 The default theme needs no configuration. To customise it, place [config/config.toml](config/config.toml) and [config/content.toml](config/content.toml) in `~/.config/seqviz-rs/`, or in `seqviz-rs/` under an absolute `XDG_CONFIG_HOME`.
 

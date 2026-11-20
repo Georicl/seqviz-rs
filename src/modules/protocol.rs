@@ -144,7 +144,13 @@ impl ModuleRequest {
                 view_token: Some(view.token),
                 operation_id: None,
             },
-            Request::Search {
+            Request::Edit {
+                file, operation_id, ..
+            }
+            | Request::Save {
+                file, operation_id, ..
+            }
+            | Request::Search {
                 file, operation_id, ..
             }
             | Request::Copy {
@@ -218,7 +224,13 @@ impl ModuleUpdate {
                 view_token: Some(snapshot.request.token),
                 operation_id: None,
             },
-            Update::Selected {
+            Update::EditReady {
+                file, operation_id, ..
+            }
+            | Update::Saved {
+                file, operation_id, ..
+            }
+            | Update::Selected {
                 file, operation_id, ..
             }
             | Update::Copied {

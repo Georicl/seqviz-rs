@@ -12,6 +12,10 @@ impl SequenceView {
     /// - `key`: Keyboard event received from the terminal or the application shell.
     pub(crate) fn key(&mut self, key: KeyEvent) {
         self.redraw = true;
+        if self.editor.is_some() {
+            self.edit_key(key);
+            return;
+        }
         if self.input.is_some() {
             self.input_key(key);
             return;
@@ -68,6 +72,7 @@ impl SequenceView {
             KeyCode::F(2) => self.open_page(Page::File),
             KeyCode::F(3) => self.open_page(Page::Record),
             KeyCode::F(4) => self.open_page(Page::Statistics),
+            KeyCode::Char('i') => self.open_editor(),
             KeyCode::Char('/') => self.input = Some(Input::Search(String::new())),
             KeyCode::Char(':') => self.input = Some(Input::Position(String::new())),
             KeyCode::Char('f') => self.input = Some(Input::Filter(self.tab().filter_text.clone())),

@@ -91,6 +91,14 @@ pub trait DocumentView {
     ///
     /// - `event`: Keyboard event received from the terminal or the application shell.
     fn key(&mut self, event: KeyEvent);
+    /// Accept a terminal paste inside a text prompt. Browsing shortcuts never see pasted keys.
+    fn paste(&mut self, text: &str) {
+        if self.input_prompt().is_some() {
+            for c in text.chars().filter(|c| !c.is_control()) {
+                self.key(KeyEvent::from(crossterm::event::KeyCode::Char(c)));
+            }
+        }
+    }
     /// Handle pointer input using the page's prepared layout.
     ///
     /// # Arguments
@@ -102,6 +110,10 @@ pub trait DocumentView {
     fn tick(&mut self);
     /// Report whether a modal or prompt should receive otherwise global shortcut keys.
     fn captures_input(&self) -> bool;
+    /// Allow a draft editor to handle quit keys while editing.
+    fn captures_quit(&self) -> bool {
+        false
+    }
     /// Report whether a page modal should prevent mouse-based tab switching.
     fn captures_tab_mouse(&self) -> bool;
     /// Report whether the page needs a new backend snapshot.

@@ -6,6 +6,8 @@
 mod bam;
 /// Format recognition and sequence-alphabet classification.
 mod classify;
+/// Record drafts and atomic source updates.
+pub(crate) mod edit;
 /// Persistent records, source spans and aggregate statistics.
 mod index;
 /// Public record, progress and statistics values.
@@ -52,7 +54,7 @@ use std::{
 /// Maximum source fragment and coalesced text-span size in bytes.
 const CHUNK: usize = 64 * 1024;
 /// Record-cache schema version included in the cache identity.
-const SCHEMA: u64 = 1;
+const SCHEMA: u64 = 2;
 /// BAM four-bit nucleotide codes in nibble-value order.
 const BAM_BASES: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
 
@@ -97,7 +99,7 @@ pub struct Dataset {
     /// Canonical source path used for identity checks.
     source_path: PathBuf,
     /// File metadata fingerprint captured when the source opened.
-    source_identity: [u64; 7],
+    pub(super) source_identity: [u64; 7],
     /// Buffered logical-byte source shared by scanning and interval reads.
     reader: BufReader<Source>,
     /// Persistent records, source spans and scan progress.
