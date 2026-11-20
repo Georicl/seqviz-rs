@@ -1,6 +1,6 @@
 [package]
 name = "seqviz"
-version = "2.2.1-test.2"
+version = "2.2.1"
 edition = "2024"
 license = "MIT"
 
