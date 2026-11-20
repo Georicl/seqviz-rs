@@ -29,6 +29,7 @@ impl VcfView {
             token: id,
             contig: self.contig.clone(),
             query: self.query.clone(),
+            samples: self.af_samples(),
             cancel: Arc::clone(&cancel),
         });
         self.pending_statistics = Some(PendingOperation { id, cancel });

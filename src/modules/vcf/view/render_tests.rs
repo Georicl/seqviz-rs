@@ -55,6 +55,8 @@ fn fixture(width: u16, height: u16, samples: &[&str]) -> VcfView {
         format: ["GT", "AD", "DP", "GQ"].map(str::to_owned).into(),
     };
     view.update(ModuleUpdate::vcf(Update::View(Box::new(Snapshot {
+        matrix: Vec::new(),
+        frequencies: Vec::new(),
         request,
         header: Arc::new(VcfHeader {
             version: "VCFv4.3".into(),

@@ -23,7 +23,11 @@ pub(super) fn draw(frame: &mut Frame, view: &VcfView) {
         return;
     }
     draw_header(frame, view);
-    draw_table(frame, view);
+    if view.matrix {
+        super::matrix::draw(frame, view);
+    } else {
+        draw_table(frame, view);
+    }
     draw_details(frame, view);
     if let Some(overlay) = view.overlay {
         let title = match overlay {
@@ -128,7 +132,7 @@ fn columns(area: Rect) -> Vec<(usize, usize)> {
 ///
 /// - `spans`: Styled text fragments to fit within the available display columns.
 /// - `width`: Available width measured in terminal display columns.
-fn fit(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+pub(super) fn fit(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     if width == 0 {
         return Vec::new();
     }
@@ -521,7 +525,19 @@ fn draw_details(frame: &mut Frame, view: &VcfView) {
             },
         )
     } else {
-        " Details ".into()
+        if view.detail == Detail::Af {
+            let scope = if view.af_pinned {
+                format!("{} pinned", view.samples.pinned_count())
+            } else {
+                format!(
+                    "all {}",
+                    view.snapshot.as_ref().map_or(0, |s| s.header.samples.len())
+                )
+            };
+            format!(" AF · GT: {scope} samples · a switches scope ")
+        } else {
+            " Details ".into()
+        }
     };
     frame.render_widget(
         Block::default()
@@ -534,7 +550,7 @@ fn draw_details(frame: &mut Frame, view: &VcfView) {
             })),
         view.layout.details,
     );
-    let labels = ["INFO", "SAMPLES", "RAW"];
+    let labels = ["INFO", "SAMPLES", "RAW", "AF"];
     let tabs = labels
         .into_iter()
         .enumerate()
@@ -554,6 +570,7 @@ fn draw_details(frame: &mut Frame, view: &VcfView) {
     frame.render_widget(Paragraph::new(Line::from(tabs)), view.layout.detail_tabs);
     let stops = tab_stops(view);
     let heading = match view.detail {
+        Detail::Af => "ALT	INFO/AF	AC(GT)	AN(GT)	AF(GT)".into(),
         Detail::Info => "FIELD       VALUE".into(),
         Detail::Samples => view.sample_heading(),
         Detail::Raw => "Original VCF row · TABs preserved when copied".into(),
@@ -604,6 +621,14 @@ fn draw_details(frame: &mut Frame, view: &VcfView) {
     if rows.is_empty() {
         frame.render_widget(
             Paragraph::new(match view.detail {
+                Detail::Af
+                    if view
+                        .entry()
+                        .is_some_and(|e| !e.record.alternates.is_empty()) =>
+                {
+                    "Loading allele frequencies…"
+                }
+                Detail::Af => "No alternate alleles",
                 Detail::Info => "No INFO fields",
                 Detail::Samples => "No samples",
                 Detail::Raw => "No record",

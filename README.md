@@ -143,7 +143,8 @@ The table shows CHROM, POS, ID, REF, ALT, TYPE, QUAL and FILTER. Narrow windows 
 | --- | --- |
 | Move through variants or detail rows | ↑ / ↓ or `j` / `k`; Page Up / Page Down |
 | Focus details / return to table | Enter / Esc |
-| INFO / Samples / Raw | `1` / `2` / `3`, or `[` / `]` |
+| Variant table / genotype matrix | `M` |
+| INFO / Samples / Raw / AF | `1` / `2` / `3` / `4`, or `[` / `]` |
 | Scroll details horizontally | ← / →, or `h` / `l` |
 | Choose a contig | `c`, type to filter, then Enter; All records is also available |
 | Locate a position in the current contig | `:`, then a 1-based coordinate and Enter |
@@ -155,6 +156,10 @@ The table shows CHROM, POS, ID, REF, ALT, TYPE, QUAL and FILTER. Narrow windows 
 | Original header | `m` or F3 |
 | Copy current context | `y` |
 | Copy header and current record from table or Raw | `Y` |
+
+Press uppercase `M` in a VCF to toggle the genotype matrix. Rows are records and columns are samples. Use the arrows to select a cell, Enter to inspect its FORMAT values and Esc to return to the cell. The matrix follows the current filters, sort order and pinned-sample display. A dash (`—`) means the record has no GT field. GT values containing missing alleles retain their original dots.
+
+Press `4` for per-ALT INFO/AF from the file alongside AC, AN and AF from GT. AN counts all known reference and alternate copies, including known copies in partially missing genotypes. A zero denominator displays as `.`. F4 shows both frequency distributions for the current record filter, counting each ALT separately. GT calculations use all samples by default. Press `a` in AF details or statistics to explicitly switch to pinned samples. INFO/AF retains the original file scope.
 
 Samples retains FORMAT field order by default and parses visible samples as needed. Use `F` to choose and reorder fields, or submit empty input to show all fields. The selection persists across variants; absent fields appear as `.`. Pinned sample names are underlined, and `P` switches between pinned and all samples. Copied headings follow the displayed field order. GT colours identify allele numbers, with the same ordering in AD bars. QUAL and GQ retain their original numeric values; FILTER `.` is distinct from PASS.
 

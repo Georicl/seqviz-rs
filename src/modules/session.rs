@@ -426,6 +426,7 @@ mod tests {
                 anchor: None,
                 start: 0,
                 count: 1,
+                ..Default::default()
             }))
         };
         assert!(session.handle_requests([view(1)].into_iter()));

@@ -27,7 +27,7 @@ use std::{
 /// Decoded-source buffer capacity and the normal scan chunk size in bytes.
 const CHUNK: usize = 64 * 1024;
 /// Cache schema version included in the source-specific cache key.
-const SCHEMA: u64 = 4;
+const SCHEMA: u64 = 5;
 
 /// Wrap a SQLite error without losing its concrete cause for rollback decisions.
 ///
@@ -230,6 +230,13 @@ impl Dataset {
                 gt_partial INTEGER NOT NULL,
                 gt_unavailable INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS allele_bins (
+                record_id INTEGER NOT NULL,
+                alt_index INTEGER NOT NULL,
+                gt_bin INTEGER NOT NULL,
+                info_bin INTEGER NOT NULL,
+                PRIMARY KEY(record_id,alt_index)
+            ) WITHOUT ROWID;
             CREATE UNIQUE INDEX IF NOT EXISTS contig_order ON records(contig, ordinal);
             CREATE INDEX IF NOT EXISTS loci ON records(contig, pos, id);",
         )
@@ -468,6 +475,24 @@ impl Dataset {
                 }
             });
         let genotype_counts = genotype_counts(record);
+        let frequencies = super::frequency::Frequencies::read(record, None);
+        let mut insert = self
+            .db
+            .prepare_cached(
+                "INSERT INTO allele_bins(record_id,alt_index,gt_bin,info_bin) VALUES (?1,?2,?3,?4)",
+            )
+            .map_err(sql)?;
+        for (i, info) in frequencies.info.iter().enumerate() {
+            insert
+                .execute(params![
+                    self.progress.records,
+                    i,
+                    super::frequency::bin(frequencies.gt_frequency(i)),
+                    super::frequency::bin(*info)
+                ])
+                .map_err(sql)?;
+        }
+        drop(insert);
         self.db
             .execute(
                 "INSERT INTO records (

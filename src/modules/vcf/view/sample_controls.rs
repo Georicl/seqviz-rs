@@ -9,7 +9,7 @@ impl VcfView {
             return;
         };
         let after = if next {
-            self.detail_row.saturating_add(1)
+            self.active_sample().saturating_add(1)
         } else {
             0
         };
@@ -19,6 +19,11 @@ impl VcfView {
             self.message = format!("No sample matches {query:?}");
             return;
         };
+        if self.matrix_focused() {
+            self.set_matrix_column(row);
+            self.message.clear();
+            return;
+        }
         self.change_detail(Detail::Samples);
         self.focus = Focus::Detail;
         self.select_detail_row(row);
@@ -27,25 +32,33 @@ impl VcfView {
 
     /// Pin or unpin the selected source sample and keep the remaining row visible.
     pub(super) fn pin_sample(&mut self) {
-        if self.detail != Detail::Samples {
+        if self.detail != Detail::Samples && !self.matrix_focused() {
             self.message = "Open Samples to pin a sample".into();
             return;
         }
         let total = self.snapshot.as_ref().map_or(0, |s| s.header.samples.len());
-        let row = self.samples.toggle_pin(total, self.detail_row);
+        let row = self.samples.toggle_pin(total, self.active_sample());
         self.cancel_copy();
         self.reset_detail_position();
-        self.select_detail_row(row.unwrap_or(0));
+        self.set_matrix_column(row.unwrap_or(0));
+        if !self.matrix_focused() {
+            self.select_detail_row(row.unwrap_or(0));
+        }
+        self.dirty |= self.matrix || self.af_pinned;
         self.message = format!("{} pinned samples", self.samples.pinned_count());
     }
 
     /// Switch between the complete sample list and the pinned subset.
     pub(super) fn toggle_pinned_samples(&mut self) {
         let total = self.snapshot.as_ref().map_or(0, |s| s.header.samples.len());
-        let row = self.samples.toggle_pinned_only(total, self.detail_row);
-        self.change_detail(Detail::Samples);
-        self.focus = Focus::Detail;
-        self.select_detail_row(row);
+        let row = self.samples.toggle_pinned_only(total, self.active_sample());
+        self.set_matrix_column(row);
+        if !self.matrix_focused() {
+            self.change_detail(Detail::Samples);
+            self.focus = Focus::Detail;
+            self.select_detail_row(row);
+        }
+        self.dirty |= self.matrix;
         self.message = if self.samples.pinned_only() {
             "Showing pinned samples; P shows all".into()
         } else {

@@ -572,6 +572,7 @@ fn view(file: usize, token: u64, selected: u64) -> Request {
         anchor: None,
         start: selected,
         count: 2,
+        ..Default::default()
     })
 }
 
@@ -916,13 +917,13 @@ fn queried_statistics_preserve_quality_and_genotype_denominators() {
     let mut data = Dataset::open(&path, &cache).unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
     let partial = data
-        .statistics(None, &Query::default(), Arc::clone(&cancel))
+        .statistics(None, &Query::default(), None, Arc::clone(&cancel))
         .unwrap();
     assert!(!partial.complete);
     assert_eq!(partial.records, 0);
     finish(&mut data);
     let all = data
-        .statistics(None, &Query::default(), Arc::clone(&cancel))
+        .statistics(None, &Query::default(), None, Arc::clone(&cancel))
         .unwrap();
     assert!(all.complete);
     assert_eq!(
@@ -952,7 +953,7 @@ fn queried_statistics_preserve_quality_and_genotype_denominators() {
         3
     );
     let query = Query::parse("pass type=SNV").unwrap();
-    let filtered = data.statistics(None, &query, cancel).unwrap();
+    let filtered = data.statistics(None, &query, None, cancel).unwrap();
     assert_eq!(
         (
             filtered.records,
@@ -976,14 +977,14 @@ fn cancelled_statistics_leave_the_dataset_usable() {
     finish(&mut data);
     let cancel = Arc::new(AtomicBool::new(true));
     assert_eq!(
-        data.statistics(None, &Query::default(), Arc::clone(&cancel))
+        data.statistics(None, &Query::default(), None, Arc::clone(&cancel))
             .unwrap_err()
             .kind(),
         std::io::ErrorKind::Interrupted
     );
     cancel.store(false, Ordering::Relaxed);
     assert_eq!(
-        data.statistics(None, &Query::default(), cancel)
+        data.statistics(None, &Query::default(), None, cancel)
             .unwrap()
             .records,
         5
@@ -1004,9 +1005,14 @@ fn cancelled_statistics_leave_the_dataset_usable() {
         std::io::ErrorKind::Interrupted
     );
     assert_eq!(
-        data.statistics(None, &Query::default(), Arc::new(AtomicBool::new(false)))
-            .unwrap_err()
-            .kind(),
+        data.statistics(
+            None,
+            &Query::default(),
+            None,
+            Arc::new(AtomicBool::new(false))
+        )
+        .unwrap_err()
+        .kind(),
         std::io::ErrorKind::Interrupted
     );
     worker.store(false, Ordering::Relaxed);

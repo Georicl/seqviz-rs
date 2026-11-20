@@ -3,6 +3,17 @@ use super::model::{ContigSummary, Progress, RecordSummary, VcfEntry, VcfHeader};
 use super::{query::Query, statistics::Statistics};
 use std::sync::{Arc, atomic::AtomicBool};
 
+/// Sample projection requested for the bounded viewport.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Projection {
+    /// Original sample indices displayed in the matrix, in ascending order.
+    pub matrix_columns: Vec<usize>,
+    /// Calculate selected-record AF detail when requested.
+    pub show_af: bool,
+    /// Explicitly selected samples for GT-derived AF; None denotes all.
+    pub af_samples: Option<Vec<usize>>,
+}
+
 /// Identify a tab, request generation and bounded region of the variant table.
 ///
 /// # Fields
@@ -17,6 +28,8 @@ use std::sync::{Arc, atomic::AtomicBool};
 /// - `count`: Requested number of table rows, capped by the data layer.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ViewRequest {
+    /// Sample projection for matrix cells and allele frequency details.
+    pub projection: Projection,
     /// Tab index used to route the response.
     pub file: usize,
     /// View generation used to reject stale responses.
@@ -51,6 +64,10 @@ pub struct ViewRequest {
 /// - `paused`: Whether automatic background indexing is paused for this tab.
 #[derive(Clone, Debug)]
 pub struct Snapshot {
+    /// Window of projected genotypes aligned with rows and requested columns.
+    pub matrix: Vec<Vec<String>>,
+    /// Selected record AF detail, one logical row per ALT.
+    pub frequencies: Vec<String>,
     /// Original viewport identity and filter for this response.
     pub request: ViewRequest,
     /// Shared original header and parsed metadata.
@@ -121,6 +138,8 @@ pub enum Request {
         contig: Option<String>,
         /// Predicates defining the report's matching records.
         query: Query,
+        /// Explicit GT sample subset for the AF distribution.
+        samples: Option<Vec<usize>>,
         /// Cooperative cancellation shared with the originating page.
         cancel: Arc<AtomicBool>,
     },
@@ -157,7 +176,7 @@ pub enum Update {
         /// Independent report identity.
         token: u64,
         /// Aggregates over the matching indexed prefix.
-        statistics: Statistics,
+        statistics: Box<Statistics>,
     },
     /// A statistics error, kept separate from copy and viewport status.
     StatisticsFailed {

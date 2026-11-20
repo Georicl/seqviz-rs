@@ -50,6 +50,9 @@ impl VcfView {
                 KeyCode::Char('y') | KeyCode::Char('Y') => self.copy(false),
                 KeyCode::F(2) => self.open_overlay(Overlay::File),
                 KeyCode::F(3) => self.open_overlay(Overlay::Header),
+                KeyCode::Char('a') if self.overlay == Some(Overlay::Statistics) => {
+                    self.toggle_af_scope()
+                }
                 KeyCode::F(4) => self.open_overlay(Overlay::Statistics),
                 KeyCode::F(1) | KeyCode::Char('?') => self.open_overlay(Overlay::Help),
                 _ => {}
@@ -84,6 +87,24 @@ impl VcfView {
             KeyCode::End => {
                 self.select_detail_row(self.detail_len().saturating_sub(1));
             }
+            KeyCode::Char('M') => {
+                self.matrix = !self.matrix;
+                self.focus = Focus::Table;
+                self.change_detail(if self.matrix {
+                    Detail::Af
+                } else {
+                    Detail::Info
+                });
+                self.dirty = true;
+            }
+            KeyCode::Char('a') => self.toggle_af_scope(),
+            KeyCode::Enter if self.matrix_focused() && self.layout.detail_body.height > 0 => {
+                if self.sample_count() > 0 {
+                    self.change_detail(Detail::Samples);
+                    self.focus = Focus::Detail;
+                    self.select_detail_row(self.matrix_col);
+                }
+            }
             KeyCode::Enter if self.layout.detail_body.height > 0 => {
                 self.focus = Focus::Detail;
                 self.selection = None;
@@ -95,6 +116,10 @@ impl VcfView {
                 self.drag_anchor = None;
                 let was_locating = self.locating.take().is_some();
                 if self.focus == Focus::Detail && !was_locating {
+                    if self.matrix && self.detail == Detail::Samples {
+                        self.set_matrix_column(self.detail_row);
+                        self.change_detail(Detail::Af);
+                    }
                     self.focus = Focus::Table;
                 } else {
                     self.focus = Focus::Table;
@@ -107,8 +132,15 @@ impl VcfView {
             KeyCode::Char('1') => self.change_detail(Detail::Info),
             KeyCode::Char('2') => self.change_detail(Detail::Samples),
             KeyCode::Char('3') => self.change_detail(Detail::Raw),
-            KeyCode::Char('[') => self.change_detail(Detail::at(self.detail.index() + 2)),
+            KeyCode::Char('4') => self.change_detail(Detail::Af),
+            KeyCode::Char('[') => self.change_detail(Detail::at(self.detail.index() + 3)),
             KeyCode::Char(']') => self.change_detail(Detail::at(self.detail.index() + 1)),
+            KeyCode::Left | KeyCode::Char('h') if self.matrix_focused() => {
+                self.set_matrix_column(self.matrix_col.saturating_sub(1));
+            }
+            KeyCode::Right | KeyCode::Char('l') if self.matrix_focused() => {
+                self.set_matrix_column(self.matrix_col.saturating_add(1));
+            }
             KeyCode::Left | KeyCode::Char('h') => {
                 self.horizontal = self.horizontal.saturating_sub(4)
             }
@@ -389,6 +421,9 @@ impl VcfView {
                     .map(|r| r.ordinal)
                 {
                     self.focus = Focus::Table;
+                    if self.matrix {
+                        self.select_matrix_x(x);
+                    }
                     self.change_record(ordinal);
                 }
             }
@@ -396,7 +431,7 @@ impl VcfView {
                 if layout::contains(self.layout.detail_tabs, x, y) =>
             {
                 self.change_detail(Detail::at(
-                    ((x - self.layout.detail_tabs.x) / 12).min(2) as usize
+                    ((x - self.layout.detail_tabs.x) / 12).min(3) as usize
                 ));
                 self.focus = Focus::Detail;
             }

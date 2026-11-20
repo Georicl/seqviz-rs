@@ -143,7 +143,8 @@ cargo run --release --locked -- test/test.fa test/alignments.bam test/variants.v
 | --- | --- |
 | 移动变异或详情行 | ↑ / ↓ 或 `j` / `k`；Page Up / Page Down |
 | 聚焦详情 / 返回主表 | Enter / Esc |
-| INFO / Samples / Raw | `1` / `2` / `3`，或 `[` / `]` |
+| 变异表 / 基因型矩阵 | `M` |
+| INFO / Samples / Raw / AF | `1` / `2` / `3` / `4`，或 `[` / `]` |
 | 横向滚动详情 | ← / →，或 `h` / `l` |
 | 选择 contig | `c`，输入名称筛选后按 Enter；也可选择 All records |
 | 在当前 contig 定位 | `:` 输入 1-based 坐标后按 Enter |
@@ -155,6 +156,10 @@ cargo run --release --locked -- test/test.fa test/alignments.bam test/variants.v
 | 原始 header | `m` 或 F3 |
 | 按当前上下文复制 | `y` |
 | 在主表或 Raw 中复制 header 与当前记录 | `Y` |
+
+在 VCF 主表按大写 `M` 打开基因型矩阵。每行是一条变异记录，每列是一个样本。方向键选择格子，Enter 查看该样本在该位点的 FORMAT 值，Esc 回到原格；再次按 `M` 返回变异表。矩阵沿用当前筛选、排序及固定样本设置。`—` 表示该记录没有 GT 字段，含点号的 GT 保留原文。
+
+按 `4` 查看该记录每个 ALT 的原始 INFO/AF、从 GT 统计的 AC、AN 和 AF。AN 包括已知的参考及替代等位基因，部分缺失的 GT 只计已知的拷贝，AN 为 0 时 AF 显示为 `.`。F4 按当前筛选范围汇总每个 ALT 的频率分布。GT 默认使用全部样本；在 AF 页或 F4 按 `a` 明确切换到固定样本。INFO/AF 始终使用文件中的注释。
 
 Samples 默认保留 FORMAT 字段顺序，按需解析可见样本。`F` 可选择并重排字段，清空输入恢复全部字段；选择在变异切换后保留，当前变异缺少的字段显示 `.`。固定样本名称带下划线，`P` 可在固定样本和全部样本间切换。复制内容的字段标题与当前显示顺序一致。GT 颜色代表等位基因编号，AD 使用相同顺序；QUAL、GQ 显示原始数值，FILTER `.` 与 PASS 分开显示。
 

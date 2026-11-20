@@ -51,7 +51,7 @@ pub enum ModuleRequest {
     /// Sequence-domain request with routing identity.
     Sequence(Envelope<Request>),
     /// VCF-domain request with routing identity.
-    Vcf(Envelope<super::vcf::protocol::Request>),
+    Vcf(Box<Envelope<super::vcf::protocol::Request>>),
 }
 /// Format-probe results and domain replies returned to document pages.
 ///
@@ -126,10 +126,10 @@ impl ModuleRequest {
             },
             VcfRequest::Quit => MessageIdentity::default(),
         };
-        Self::Vcf(Envelope {
+        Self::Vcf(Box::new(Envelope {
             identity,
             payload: request,
-        })
+        }))
     }
 
     /// Wrap a sequence request with document, viewport or operation identity as applicable.

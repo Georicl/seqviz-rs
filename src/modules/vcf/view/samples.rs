@@ -94,6 +94,11 @@ impl SampleNavigation {
         self.pinned_only
     }
 
+    /// Source-ordered sample subset for an explicit cohort calculation.
+    pub(super) fn pinned_indices(&self) -> Vec<usize> {
+        self.pinned.iter().copied().collect()
+    }
+
     /// Count explicitly pinned source sample columns.
     pub(super) fn pinned_count(&self) -> usize {
         self.pinned.len()

@@ -5,6 +5,8 @@ mod controls;
 mod events;
 /// Allocate terminal rectangles for the table and detail panels.
 mod layout;
+/// Bounded matrix navigation and rendering.
+mod matrix;
 /// Check query controls, stale replies and explicit statistics lifetimes.
 #[cfg(test)]
 mod query_tests;
@@ -65,6 +67,8 @@ enum Detail {
     Samples,
     /// The preserved original record text.
     Raw,
+    /// Frequencies per alternate allele.
+    Af,
 }
 impl Detail {
     /// Return the zero-based detail-tab position.
@@ -73,6 +77,7 @@ impl Detail {
             Self::Info => 0,
             Self::Samples => 1,
             Self::Raw => 2,
+            Self::Af => 3,
         }
     }
     /// Map a cyclic tab index to INFO, Samples or Raw.
@@ -81,7 +86,7 @@ impl Detail {
     ///
     /// - `index`: Detail-tab index, reduced cyclically across INFO, Samples and Raw.
     fn at(index: usize) -> Self {
-        [Self::Info, Self::Samples, Self::Raw][index % 3]
+        [Self::Info, Self::Samples, Self::Raw, Self::Af][index % 4]
     }
 }
 /// The panel receiving record or detail-row navigation commands.
@@ -218,6 +223,12 @@ pub(crate) struct VcfView {
     filter_text: String,
     /// Sample navigation and column preferences retained across variants.
     samples: SampleNavigation,
+    /// Show genotypes instead of variant metadata in the upper table.
+    matrix: bool,
+    /// Selected sample in the current all/pinned matrix projection.
+    matrix_col: usize,
+    /// Explicit AF calculation scope, independent of the visible columns.
+    af_pinned: bool,
     /// Last sample name query, reused by the next-match command.
     sample_query: String,
     /// Statistics for the last explicit request in this query scope.
@@ -304,6 +315,9 @@ impl VcfView {
             query: Query::default(),
             filter_text: String::new(),
             samples: SampleNavigation::default(),
+            matrix: false,
+            matrix_col: 0,
+            af_pinned: false,
             sample_query: String::new(),
             statistics: None,
             statistics_error: None,
@@ -427,21 +441,17 @@ impl VcfView {
     /// - `detail`: Detail tab to activate, selecting INFO, Samples or Raw content.
     fn change_detail(&mut self, detail: Detail) {
         self.cancel_copy();
+        self.dirty |= (self.detail == Detail::Af) != (detail == Detail::Af);
         self.detail = detail;
         self.reset_detail_position();
     }
     /// Count rows in the active INFO, sample or raw-record detail page.
     fn detail_len(&self) -> usize {
-        let Some(entry) = self.entry() else {
-            return 0;
-        };
         match self.detail {
-            Detail::Info => entry.record.info_fields().len(),
-            Detail::Samples => self
-                .snapshot
-                .as_ref()
-                .map_or(0, |s| self.samples.len(s.header.samples.len())),
-            Detail::Raw => 1,
+            Detail::Info => self.entry().map_or(0, |e| e.record.info_fields().len()),
+            Detail::Samples => self.sample_count(),
+            Detail::Raw => usize::from(self.entry().is_some()),
+            Detail::Af => self.af_rows().len(),
         }
     }
     /// Untruncated logical rows; TABs remain in these strings for copying.
@@ -468,6 +478,13 @@ impl VcfView {
                         format!("{key}\t{value}")
                     }
                 })
+                .collect(),
+            Detail::Af => self
+                .af_rows()
+                .iter()
+                .skip(start)
+                .take(count)
+                .cloned()
                 .collect(),
             Detail::Samples => self.sample_rows(start, count),
             Detail::Raw if start == 0 && count > 0 => vec![entry.record.raw.clone()],
@@ -561,6 +578,11 @@ impl VcfView {
                         .map(|line| format!("{header}\n{line}"))
                         .unwrap_or_default()
                 }
+                Detail::Af => self
+                    .af_rows()
+                    .get(self.detail_row)
+                    .cloned()
+                    .unwrap_or_default(),
                 Detail::Raw => entry.record.raw.clone(),
             }
         };
@@ -655,7 +677,10 @@ impl VcfView {
                 "VCF BROWSER".into(),
                 "↑/↓ or j/k  Select variant / detail row".into(),
                 "Enter      Focus details; Esc returns to variants".into(),
-                "1 / 2 / 3  INFO / Samples / Raw".into(),
+                "M          Toggle genotype matrix; arrows select a cell; Enter inspects sample"
+                    .into(),
+                "1/2/3/4    INFO / Samples / Raw / allele frequencies".into(),
+                "a          Switch GT frequency scope: all or explicitly pinned samples".into(),
                 "[ / ]      Previous / next detail page".into(),
                 "h / l      Scroll detail text horizontally".into(),
                 "c          Search and select contig; includes All records".into(),
@@ -745,6 +770,11 @@ impl VcfView {
             anchor: self.anchor,
             start: self.start,
             count: self.layout.rows.height.max(1) as usize,
+            projection: super::protocol::Projection {
+                matrix_columns: self.matrix_columns(),
+                show_af: self.detail == Detail::Af,
+                af_samples: self.af_samples(),
+            },
         }));
         self.dirty = false;
     }
@@ -882,7 +912,10 @@ impl DocumentView for VcfView {
                 } else if self.message == "Opening…" {
                     self.message.clear();
                 }
+                let needs_columns =
+                    self.matrix && self.snapshot.is_none() && !snapshot.header.samples.is_empty();
                 self.snapshot = Some(snapshot);
+                self.dirty |= needs_columns;
                 self.load_error = None;
                 self.redraw = true;
             }
@@ -928,7 +961,7 @@ impl DocumentView for VcfView {
                 token,
                 statistics,
             } if self.accepts_statistics(file, token) => {
-                self.statistics = Some(statistics);
+                self.statistics = Some(*statistics);
                 self.statistics_error = None;
                 self.refresh_overlay();
                 self.redraw = true;
@@ -990,7 +1023,7 @@ impl DocumentView for VcfView {
         } else {
             "Opening…".into()
         };
-        Status { message, hints: "? help  f filter  s sort  F4 stats  / sample  p/P pin  F fields  y copy  Tab file  q quit".into() }
+        Status { message, hints: "? help  M matrix  4 AF  f filter  s sort  F4 stats  / sample  p/P pin  F fields  y copy  Tab file  q quit".into() }
     }
     /// Expose the current position or contig editor to the application prompt widget.
     fn input_prompt(&self) -> Option<InputPrompt<'_>> {

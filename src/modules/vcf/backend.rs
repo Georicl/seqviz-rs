@@ -224,19 +224,25 @@ impl Backend {
                 token,
                 contig,
                 query,
+                samples,
                 cancel,
             } => {
                 if self.files.is_open(file) {
                     let owner = self.files.owner(file);
-                    if let Some(slot) = &self.slots[owner] {
-                        let result = slot.dataset.statistics(contig.as_deref(), &query, cancel);
+                    if let Some(slot) = &mut self.slots[owner] {
+                        let result = slot.dataset.statistics(
+                            contig.as_deref(),
+                            &query,
+                            samples.as_deref(),
+                            cancel,
+                        );
                         let update = match result {
                             Ok(mut statistics) => {
                                 statistics.complete &= slot.failure.is_none();
                                 Update::Statistics {
                                     file,
                                     token,
-                                    statistics,
+                                    statistics: Box::new(statistics),
                                 }
                             }
                             Err(error) => Update::StatisticsFailed {
@@ -427,14 +433,40 @@ fn snapshot(slot: &mut Slot, mut request: ViewRequest, paused: bool) -> io::Resu
                 .find(|row| row.ordinal == request.selected)
                 .map(|row| row.id);
         }
+        let mut matrix = Vec::new();
+        if !request.projection.matrix_columns.is_empty() {
+            for row in &rows {
+                let entry = dataset
+                    .entry(None, row.id)?
+                    .ok_or_else(|| io::Error::other("Indexed row unavailable"))?;
+                matrix.push(
+                    super::frequency::genotypes(
+                        &entry.record,
+                        Some(&request.projection.matrix_columns),
+                    )
+                    .map(|gt| gt.unwrap_or("—").to_owned())
+                    .collect(),
+                );
+            }
+        }
+        let selected =
+            dataset.query_entry(request.contig.as_deref(), &request.query, request.selected)?;
+        let frequencies = selected
+            .as_ref()
+            .filter(|_| request.projection.show_af)
+            .map_or_else(Vec::new, |entry| {
+                super::frequency::Frequencies::read(
+                    &entry.record,
+                    request.projection.af_samples.as_deref(),
+                )
+                .detail(&entry.record)
+            });
         Ok(Snapshot {
+            matrix,
+            frequencies,
             header: dataset.header(),
             rows,
-            selected: dataset.query_entry(
-                request.contig.as_deref(),
-                &request.query,
-                request.selected,
-            )?,
+            selected,
             total: dataset.query_total(request.contig.as_deref(), &request.query)?,
             contigs: dataset.contigs()?,
             compression: dataset.compression().to_owned(),

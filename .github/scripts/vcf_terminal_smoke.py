@@ -399,11 +399,55 @@ def query_samples_and_statistics(vcf, records):
         session.close()
 
 
+
+def genotype_matrix():
+    """Check that pinning a matrix column and selecting an AF denominator are independent."""
+    session = Session("genotype-matrix", [ROOT / "test/variants.vcf"])
+    try:
+        session.wait(lambda: "Indexed" in session.text(), "indexed-source")
+        session.send(b"Mj\r")
+        session.wait(lambda: "Details · Samples" in session.text() and "chr1:240" in session.text(),
+                     "inspect-while-record-request-is-pending")
+        session.send(b"\x1b")
+        session.wait(lambda: "Genotype matrix" in session.text() and "50.000%" in session.text(),
+                     "multiallelic-frequency")
+        session.send(b"/SAMPLE_B\rpP")
+        session.wait(lambda: "SAMPLE_B" in session.text() and "SAMPLE_A" not in session.text(),
+                     "matrix-only-pinned")
+        session.check(bool(re.search(r"A\s+25.000%\s+1\s+4\s+25.000%", session.text())),
+                      "pinning-does-not-change-denominator")
+        session.send(b"a")
+        session.wait(lambda: bool(re.search(r"A\s+25.000%\s+0\s+2\s+0.000%", session.text())),
+                     "explicit-pinned-frequency")
+        session.send(b"\r")
+        session.wait(lambda: "Details · Samples" in session.text() and "0|2" in session.text(),
+                     "inspect-matrix-cell")
+        session.copy(b"SAMPLE\tGT\tAD\tDP\tGQ\nSAMPLE_B\t0|2\t9,0,9\t18\t50", "matrix-enter-sample")
+        session.send(b"\x1b")
+        session.send(b"fcontig=chr1 start=100 end=380\r")
+        session.send(b"\x1b[14~")
+        session.wait(lambda: "Matching records: 3" in session.text(), "filtered-AF")
+        report = session.copy_payload("pinned-ALT-counts").decode()
+        session.check("GT: 1 pinned samples" in report and
+                      bool(re.search(r"0%\s+2\s+0\n", report)), "pinned-AF-distribution")
+        session.send(b"a")
+        session.wait(lambda: "Matching records: 3" in session.text(), "all-sample-refresh")
+        report = session.copy_payload("all-ALT-counts").decode()
+        session.check("GT: all 2 samples" in report and
+                      bool(re.search(r"\[5,100%\]\s+4\s+3", report)), "all-samples-AF-distribution")
+        session.send(b"qM")
+        session.wait(lambda: "Variants" in session.text() and "Genotype matrix" not in session.text(),
+                     "return-to-filtered-table")
+    finally:
+        session.close()
+
+
 def main():
     if not BINARY.is_file() or not os.access(BINARY, os.X_OK):
         raise SystemExit(f"Build sq first, or set SQ_BIN: {BINARY}")
     vcf, compressed, fasta, empty, zero, bad, header, records, values, long_value = fixture()
     for name, action in [
+        ("genotype-matrix", genotype_matrix),
         ("geometry", lambda: geometry([vcf, fasta], records)),
         ("interactions", lambda: interactions(vcf, compressed, fasta, header, records, values, long_value)),
         ("empty-and-errors", lambda: empty_and_errors([empty, zero, bad])),
